@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weather Forecast</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header>
+    <h1>72-Hour Probabilistic Forecast</h1>
+    <div id="location-bar">
+      <button id="geolocate-btn" type="button">Use My Location</button>
+      <span class="separator">or</span>
+      <form id="zip-form">
+        <input id="zip-input" type="text" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" placeholder="ZIP code" aria-label="ZIP code">
+        <button type="submit">Go</button>
+      </form>
+      <span id="location-label"></span>
+    </div>
+  </header>
+
+  <main id="app">
+    <div id="loading" class="hidden">
+      <div class="spinner"></div>
+      <p>Loading forecast data&hellip;</p>
+    </div>
+    <div id="error" class="hidden"></div>
+    <div id="forecast" class="hidden">
+      <section id="aberrations"></section>
+      <section id="charts">
+        <div class="chart-container">
+          <h2>Temperature</h2>
+          <canvas id="temp-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <h2>Precipitation</h2>
+          <canvas id="precip-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <h2>Wind Speed</h2>
+          <canvas id="wind-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <h2>Cloud Cover</h2>
+          <canvas id="cloud-chart"></canvas>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <p>Data: <a href="https://dynamical.org" target="_blank" rel="noopener">dynamical.org</a> NOAA GEFS &middot; 31-member ensemble forecast</p>
+  </footer>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

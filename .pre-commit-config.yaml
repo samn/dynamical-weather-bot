@@ -1,0 +1,23 @@
+repos:
+  - repo: local
+    hooks:
+      - id: oxlint
+        name: oxlint
+        entry: npx oxlint src/ --deny-warnings
+        language: system
+        files: \.[jt]sx?$
+        pass_filenames: false
+
+      - id: typecheck
+        name: typecheck
+        entry: npx tsc --noEmit
+        language: system
+        files: \.tsx?$
+        pass_filenames: false
+
+      - id: test
+        name: test
+        entry: npx vitest run
+        language: system
+        files: \.[jt]sx?$
+        pass_filenames: false
