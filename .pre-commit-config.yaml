@@ -24,7 +24,7 @@ repos:
 
       - id: test
         name: test
-        entry: mise exec -- npx vitest run
+        entry: mise exec -- npx vitest run --coverage
         language: system
         files: \.[jt]sx?$
         pass_filenames: false

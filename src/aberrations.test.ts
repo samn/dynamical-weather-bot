@@ -121,4 +121,58 @@ describe("detectAberrations", () => {
     const result = detectAberrations(forecast, makeRecent());
     expect(result.some((a) => a.message.includes("swing"))).toBe(true);
   });
+
+  it("detects persistent precipitation", () => {
+    const forecast = makeForecast({
+      precipitation: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 3, p10: 1, p90: 5, min: 0, max: 7, hoursFromNow: i * 3 }),
+      ),
+    });
+    const recent = makeRecent({ avgPrecipitation: 2 });
+    const result = detectAberrations(forecast, recent);
+    expect(result.some((a) => a.type === "rain" && a.message.includes("Persistent"))).toBe(true);
+  });
+
+  it("detects increasing cloud cover", () => {
+    const forecast = makeForecast({
+      cloudCover: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 0.9, p10: 0.8, p90: 1, min: 0.7, max: 1, hoursFromNow: i * 3 }),
+      ),
+    });
+    const recent = makeRecent({ avgCloudCover: 0.3 });
+    const result = detectAberrations(forecast, recent);
+    expect(result.some((a) => a.type === "cool" && a.message.includes("Increasing"))).toBe(true);
+  });
+
+  it("uses imperial units when specified", () => {
+    const forecast = makeForecast({
+      temperature: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 28, p10: 26, p90: 30, min: 24, max: 32, hoursFromNow: i * 3 }),
+      ),
+    });
+    const recent = makeRecent({ avgTemperature: 20 });
+    const result = detectAberrations(forecast, recent, "imperial");
+    expect(result.some((a) => a.type === "warm" && a.message.includes("°F"))).toBe(true);
+  });
+
+  it("formats wind in mph for imperial", () => {
+    const forecast = makeForecast({
+      windSpeed: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 8, p10: 6, p90: 12, min: 4, max: 15, hoursFromNow: i * 3 }),
+      ),
+    });
+    const result = detectAberrations(forecast, makeRecent(), "imperial");
+    expect(result.some((a) => a.type === "danger" && a.message.includes("mph"))).toBe(true);
+  });
+
+  it("formats precipitation in in/hr for imperial", () => {
+    const forecast = makeForecast({
+      precipitation: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 1, p10: 0.5, p90: 3, min: 0, max: 5, hoursFromNow: i * 3 }),
+      ),
+    });
+    const recent = makeRecent({ avgPrecipitation: 0.1 });
+    const result = detectAberrations(forecast, recent, "imperial");
+    expect(result.some((a) => a.type === "rain" && a.message.includes("in/hr"))).toBe(true);
+  });
 });
