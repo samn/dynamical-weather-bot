@@ -54,7 +54,15 @@ export function renderChart(opts: ChartOptions): void {
 
   const displayWidth = rect.width;
   const displayHeight = rect.height;
-  const padding = { top: 10, right: 16, bottom: 32, left: 50 };
+  const compact = displayWidth < 400;
+  const padding = {
+    top: 10,
+    right: compact ? 8 : 16,
+    bottom: compact ? 28 : 32,
+    left: compact ? 40 : 50,
+  };
+  const fontSize = compact ? 9 : 11;
+  const smallFontSize = compact ? 8 : 10;
   const chartWidth = displayWidth - padding.left - padding.right;
   const chartHeight = displayHeight - padding.top - padding.bottom;
 
@@ -129,14 +137,14 @@ export function renderChart(opts: ChartOptions): void {
 
   // Y axis labels
   ctx.fillStyle = "#8b8fa3";
-  ctx.font = "11px system-ui, sans-serif";
+  ctx.font = `${fontSize}px system-ui, sans-serif`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  const yTicks = 5;
+  const yTicks = compact ? 4 : 5;
   for (let i = 0; i <= yTicks; i++) {
     const v = yMin + (i / yTicks) * (yMax - yMin);
     const y = yScale(v);
-    ctx.fillText(`${formatValue(v)} ${unit}`, padding.left - 4, y);
+    ctx.fillText(compact ? formatValue(v) : `${formatValue(v)} ${unit}`, padding.left - 4, y);
 
     // Grid line
     ctx.strokeStyle = "#1a1d2720";
@@ -148,17 +156,19 @@ export function renderChart(opts: ChartOptions): void {
 
   // X axis labels (show every N hours)
   ctx.fillStyle = "#8b8fa3";
+  ctx.font = `${smallFontSize}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  const xLabelInterval = Math.max(1, Math.floor(data.length / 6));
+  const maxXLabels = compact ? 4 : 6;
+  const xLabelInterval = Math.max(1, Math.floor(data.length / maxXLabels));
   for (let i = 0; i < data.length; i += xLabelInterval) {
     const p = data[i]!;
     const x = xScale(i);
     const date = new Date(p.time);
     const timeStr = date.toLocaleTimeString(undefined, { hour: "numeric", hour12: true });
     const dayStr = date.toLocaleDateString(undefined, { weekday: "short" });
-    ctx.fillText(`${dayStr}`, x, padding.top + chartHeight + 4);
-    ctx.fillText(`${timeStr}`, x, padding.top + chartHeight + 16);
+    ctx.fillText(`${dayStr}`, x, padding.top + chartHeight + 2);
+    ctx.fillText(`${timeStr}`, x, padding.top + chartHeight + 2 + smallFontSize + 1);
   }
 
   // "Now" marker — vertical dashed line at current time
@@ -179,7 +189,7 @@ export function renderChart(opts: ChartOptions): void {
     ctx.restore();
 
     ctx.fillStyle = "#ffffff80";
-    ctx.font = "10px system-ui, sans-serif";
+    ctx.font = `${smallFontSize}px system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText("now", nowX, padding.top - 1);
@@ -187,9 +197,13 @@ export function renderChart(opts: ChartOptions): void {
 
   // Legend
   ctx.fillStyle = "#8b8fa3";
-  ctx.font = "10px system-ui, sans-serif";
+  ctx.font = `${smallFontSize}px system-ui, sans-serif`;
   ctx.textAlign = "right";
-  ctx.fillText("━ median  ▓ p10-p90  ░ min-max", displayWidth - padding.right, 8);
+  ctx.fillText(
+    compact ? "━ med  ▓ p10-90  ░ range" : "━ median  ▓ p10-p90  ░ min-max",
+    displayWidth - padding.right,
+    8,
+  );
 }
 
 function hexToRgba(hex: string, alpha: number): string {
