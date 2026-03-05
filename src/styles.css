@@ -198,10 +198,21 @@ button:hover {
   border: 1px solid var(--border);
 }
 
+.chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
 .chart-container h2 {
   font-size: 0.95rem;
   font-weight: 500;
-  margin-bottom: 0.5rem;
+  color: var(--text-muted);
+}
+
+.chart-legend {
+  font-size: 0.7rem;
   color: var(--text-muted);
 }
 

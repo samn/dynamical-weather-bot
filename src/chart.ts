@@ -226,16 +226,6 @@ export function renderChart(opts: ChartOptions): void {
     ctx.fillText("now", nowX, padding.top - 1);
   }
 
-  // Legend
-  ctx.fillStyle = "#8b8fa3";
-  ctx.font = `${smallFontSize}px system-ui, sans-serif`;
-  ctx.textAlign = "right";
-  ctx.fillText(
-    compact ? "━ med  ▓ p10-90  ░ range" : "━ median  ▓ p10-p90  ░ min-max",
-    displayWidth - padding.right,
-    8,
-  );
-
   // Save base image and chart state for tooltip interaction
   const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
   chartStates.set(canvas, {
