@@ -45,6 +45,11 @@ export function percentile(sorted: number[], p: number): number {
   return loVal + (hiVal - loVal) * (idx - lo);
 }
 
+/** Convert temperature from Kelvin to Celsius */
+export function kelvinToCelsius(k: number): number {
+  return k - 273.15;
+}
+
 /** Compute wind speed from u and v components */
 export function windSpeed(u: number, v: number): number {
   return Math.sqrt(u * u + v * v);
@@ -205,6 +210,7 @@ function toForecastPoints(
   leadTimeHours: number[],
   initTime: Date,
 ): ForecastPoint[] {
+  const now = Date.now();
   const numSteps = leadTimeHours.length;
   const points: ForecastPoint[] = [];
 
@@ -223,7 +229,7 @@ function toForecastPoints(
 
     points.push({
       time: time.toISOString(),
-      hoursFromNow: hours,
+      hoursFromNow: (time.getTime() - now) / 3600000,
       median: percentile(values, 50),
       p10: percentile(values, 10),
       p90: percentile(values, 90),
@@ -275,6 +281,9 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
     ),
   ]);
 
+  // Convert temperature from Kelvin to Celsius
+  const tempCelsius: number[][] = tempData.map((row) => row.map(kelvinToCelsius));
+
   // Compute wind speed from u/v components
   const windSpeedData: number[][] = windUData.map((uRow, e) =>
     uRow.map((u, t) => windSpeed(u, windVData[e]![t]!)),
@@ -288,7 +297,7 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
 
   return {
     location,
-    temperature: toForecastPoints(tempData, leadTimeHours, initTime),
+    temperature: toForecastPoints(tempCelsius, leadTimeHours, initTime),
     precipitation: toForecastPoints(precipMmHr, leadTimeHours, initTime),
     windSpeed: toForecastPoints(windSpeedData, leadTimeHours, initTime),
     cloudCover: toForecastPoints(cloudFraction, leadTimeHours, initTime),
@@ -321,7 +330,7 @@ export async function fetchRecentWeather(location: LatLon): Promise<RecentWeathe
   const windSpeeds = windUData.map((u, i) => windSpeed(u, windVData[i]!));
 
   return {
-    avgTemperature: avg(tempData),
+    avgTemperature: avg(tempData.map(kelvinToCelsius)),
     avgPrecipitation: avg(precipData.map(precipToMmHr)),
     avgWindSpeed: avg(windSpeeds),
     avgCloudCover: avg(cloudData.map(cloudCoverToFraction)),

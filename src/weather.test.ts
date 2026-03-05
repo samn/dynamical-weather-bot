@@ -4,6 +4,7 @@ import {
   windSpeed,
   precipToMmHr,
   cloudCoverToFraction,
+  kelvinToCelsius,
   latToIndex,
   lonToIndex,
 } from "./weather.js";
@@ -46,6 +47,20 @@ describe("percentile", () => {
     const arr = Array.from({ length: 10 }, (_, i) => i + 1);
     // p90 = index 8.1 -> between arr[8]=9 and arr[9]=10 -> 9 + 0.1 * (10-9) = 9.1
     expect(percentile(arr, 90)).toBeCloseTo(9.1, 5);
+  });
+});
+
+describe("kelvinToCelsius", () => {
+  it("converts 273.15K to 0°C", () => {
+    expect(kelvinToCelsius(273.15)).toBeCloseTo(0, 5);
+  });
+
+  it("converts 373.15K to 100°C", () => {
+    expect(kelvinToCelsius(373.15)).toBeCloseTo(100, 5);
+  });
+
+  it("converts 0K to -273.15°C", () => {
+    expect(kelvinToCelsius(0)).toBeCloseTo(-273.15, 5);
   });
 });
 

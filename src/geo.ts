@@ -38,15 +38,25 @@ export async function zipToLatLon(zip: string): Promise<LatLon> {
     throw new Error(`ZIP code ${zip} not found.`);
   }
   const data: unknown = await resp.json();
-  const record = data as { places: Array<{ latitude: string; longitude: string }> };
-  const place = record.places[0];
-  if (!place) {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    !("places" in data) ||
+    !Array.isArray((data as { places: unknown }).places)
+  ) {
     throw new Error(`ZIP code ${zip} not found.`);
   }
-  return {
-    latitude: parseFloat(place.latitude),
-    longitude: parseFloat(place.longitude),
-  };
+  const places = (data as { places: unknown[] }).places;
+  const place = places[0];
+  if (!place || typeof place !== "object" || !("latitude" in place) || !("longitude" in place)) {
+    throw new Error(`ZIP code ${zip} not found.`);
+  }
+  const lat = parseFloat(String((place as { latitude: unknown }).latitude));
+  const lon = parseFloat(String((place as { longitude: unknown }).longitude));
+  if (!isFinite(lat) || !isFinite(lon)) {
+    throw new Error(`Invalid coordinates for ZIP code ${zip}.`);
+  }
+  return { latitude: lat, longitude: lon };
 }
 
 /**
