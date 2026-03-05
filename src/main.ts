@@ -115,11 +115,12 @@ async function loadForecast(location: LatLon): Promise<void> {
     const aberrations = detectAberrations(forecast, recentWeather);
     renderAberrations(aberrations);
 
+    // Show forecast container before rendering so canvases have dimensions
+    showForecast();
+
     // Render charts and store for resize
     lastForecast = forecast;
     renderCharts(forecast);
-
-    showForecast();
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error occurred";
     showError(`Failed to load forecast: ${message}`);
