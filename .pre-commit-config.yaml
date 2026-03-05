@@ -1,0 +1,30 @@
+repos:
+  - repo: local
+    hooks:
+      - id: oxfmt
+        name: oxfmt
+        entry: mise exec -- npx oxfmt src/
+        language: system
+        files: \.[jt]sx?$
+        pass_filenames: false
+
+      - id: oxlint
+        name: oxlint
+        entry: mise exec -- npx oxlint src/ --deny-warnings
+        language: system
+        files: \.[jt]sx?$
+        pass_filenames: false
+
+      - id: typecheck
+        name: typecheck
+        entry: mise exec -- npx tsc --noEmit
+        language: system
+        files: \.tsx?$
+        pass_filenames: false
+
+      - id: test
+        name: test
+        entry: mise exec -- npx vitest run
+        language: system
+        files: \.[jt]sx?$
+        pass_filenames: false
