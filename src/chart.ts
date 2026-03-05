@@ -12,6 +12,36 @@ interface ChartOptions {
   formatValue?: (v: number) => string;
 }
 
+interface ChartState {
+  data: ConvertedPoint[];
+  unit: string;
+  color: string;
+  formatValue: (v: number) => string;
+  padding: { top: number; right: number; bottom: number; left: number };
+  chartWidth: number;
+  chartHeight: number;
+  displayWidth: number;
+  displayHeight: number;
+  yMin: number;
+  yMax: number;
+  compact: boolean;
+  fontSize: number;
+  smallFontSize: number;
+  /** Saved image of the fully rendered chart (before any tooltip overlay) */
+  baseImage: ImageData;
+}
+
+interface ConvertedPoint extends ForecastPoint {
+  median: number;
+  p10: number;
+  p90: number;
+  min: number;
+  max: number;
+}
+
+const chartStates = new WeakMap<HTMLCanvasElement, ChartState>();
+const listenersAttached = new WeakSet<HTMLCanvasElement>();
+
 /**
  * Render a probabilistic forecast chart on a canvas element.
  * Shows:
@@ -20,6 +50,7 @@ interface ChartOptions {
  * - Median as a solid line
  * - Time labels on X axis
  * - Value labels on Y axis
+ * - Interactive tooltip on hover/touch
  */
 export function renderChart(opts: ChartOptions): void {
   const {
@@ -32,7 +63,7 @@ export function renderChart(opts: ChartOptions): void {
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
-  const data = rawData.map((p) => ({
+  const data: ConvertedPoint[] = rawData.map((p) => ({
     ...p,
     median: conv(p.median),
     p10: conv(p.p10),
@@ -50,7 +81,7 @@ export function renderChart(opts: ChartOptions): void {
 
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const displayWidth = rect.width;
   const displayHeight = rect.height;
@@ -204,6 +235,214 @@ export function renderChart(opts: ChartOptions): void {
     displayWidth - padding.right,
     8,
   );
+
+  // Save base image and chart state for tooltip interaction
+  const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  chartStates.set(canvas, {
+    data,
+    unit,
+    color,
+    formatValue,
+    padding,
+    chartWidth,
+    chartHeight,
+    displayWidth,
+    displayHeight,
+    yMin,
+    yMax,
+    compact,
+    fontSize,
+    smallFontSize,
+    baseImage,
+  });
+
+  if (!listenersAttached.has(canvas)) {
+    attachListeners(canvas);
+    listenersAttached.add(canvas);
+  }
+}
+
+function attachListeners(canvas: HTMLCanvasElement): void {
+  let isTouch = false;
+
+  const getX = (e: PointerEvent): number => {
+    const rect = canvas.getBoundingClientRect();
+    return e.clientX - rect.left;
+  };
+
+  canvas.addEventListener("pointerdown", (e) => {
+    isTouch = e.pointerType === "touch";
+    if (isTouch) {
+      e.preventDefault();
+      drawTooltip(canvas, getX(e));
+    }
+  });
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (isTouch && !e.pressure) return;
+    drawTooltip(canvas, getX(e));
+  });
+
+  canvas.addEventListener("pointerup", () => {
+    if (isTouch) {
+      clearTooltip(canvas);
+      isTouch = false;
+    }
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    if (!isTouch) clearTooltip(canvas);
+  });
+
+  canvas.addEventListener("pointercancel", () => {
+    clearTooltip(canvas);
+    isTouch = false;
+  });
+
+  canvas.style.touchAction = "pan-y";
+  canvas.style.cursor = "crosshair";
+}
+
+function clearTooltip(canvas: HTMLCanvasElement): void {
+  const state = chartStates.get(canvas);
+  if (!state) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.putImageData(state.baseImage, 0, 0);
+}
+
+function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
+  const state = chartStates.get(canvas);
+  if (!state) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const {
+    data,
+    unit,
+    color,
+    formatValue,
+    padding,
+    chartWidth,
+    chartHeight,
+    displayWidth,
+    displayHeight,
+    yMin,
+    yMax,
+    compact,
+  } = state;
+
+  // Find nearest data point index from pointer x
+  const fraction = (pointerX - padding.left) / chartWidth;
+  const rawIdx = fraction * (data.length - 1);
+  const idx = Math.max(0, Math.min(data.length - 1, Math.round(rawIdx)));
+  const point = data[idx]!;
+
+  const xScale = (i: number): number => padding.left + (i / (data.length - 1)) * chartWidth;
+  const yScale = (v: number): number =>
+    padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
+
+  const dpr = window.devicePixelRatio || 1;
+  const x = xScale(idx);
+
+  // Restore base chart (putImageData ignores transforms, operates in pixel space)
+  ctx.putImageData(state.baseImage, 0, 0);
+  // Reset transform and apply fresh dpr scale for overlay drawing
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Draw crosshair line
+  ctx.strokeStyle = "#ffffff40";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, padding.top);
+  ctx.lineTo(x, padding.top + chartHeight);
+  ctx.stroke();
+
+  // Draw dot on median
+  const medianY = yScale(point.median);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, medianY, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Build tooltip text
+  const date = new Date(point.time);
+  const timeStr = date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  const dayStr = date.toLocaleDateString(undefined, { weekday: "short" });
+  const unitSuffix = unit ? ` ${unit}` : "";
+  const lines = [
+    `${dayStr} ${timeStr}`,
+    `Median: ${formatValue(point.median)}${unitSuffix}`,
+    `Range: ${formatValue(point.p10)} – ${formatValue(point.p90)}${unitSuffix}`,
+  ];
+
+  // Measure tooltip
+  const tooltipFont = compact ? 9 : 11;
+  ctx.font = `${tooltipFont}px system-ui, sans-serif`;
+  const lineHeight = tooltipFont + 4;
+  const tooltipPadH = 8;
+  const tooltipPadV = 6;
+  let maxTextWidth = 0;
+  for (const line of lines) {
+    const w = ctx.measureText(line).width;
+    if (w > maxTextWidth) maxTextWidth = w;
+  }
+  const tooltipW = maxTextWidth + tooltipPadH * 2;
+  const tooltipH = lines.length * lineHeight + tooltipPadV * 2;
+
+  // Position tooltip — flip side if near edge, clamp within canvas
+  let tooltipX = x + 10;
+  if (tooltipX + tooltipW > displayWidth - 2) {
+    tooltipX = x - tooltipW - 10;
+  }
+  tooltipX = Math.max(2, Math.min(displayWidth - tooltipW - 2, tooltipX));
+  let tooltipY = medianY - tooltipH / 2;
+  tooltipY = Math.max(2, Math.min(displayHeight - tooltipH - 2, tooltipY));
+
+  // Draw tooltip background
+  ctx.fillStyle = "rgba(20, 22, 30, 0.92)";
+  ctx.strokeStyle = "#3a3d4a";
+  ctx.lineWidth = 1;
+  roundRect(ctx, tooltipX, tooltipY, tooltipW, tooltipH, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  // Draw tooltip text
+  ctx.fillStyle = "#e4e6ed";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillStyle = i === 0 ? "#8b8fa3" : "#e4e6ed";
+    ctx.fillText(lines[i]!, tooltipX + tooltipPadH, tooltipY + tooltipPadV + i * lineHeight);
+  }
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 function hexToRgba(hex: string, alpha: number): string {
