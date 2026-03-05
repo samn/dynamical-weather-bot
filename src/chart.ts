@@ -142,6 +142,30 @@ export function renderChart(opts: ChartOptions): void {
     ctx.fillText(`${timeStr}`, x, padding.top + chartHeight + 16);
   }
 
+  // "Now" marker — vertical dashed line at current time
+  const now = Date.now();
+  const firstTime = new Date(data[0]!.time).getTime();
+  const lastTime = new Date(data[data.length - 1]!.time).getTime();
+  if (now >= firstTime && now <= lastTime) {
+    const fraction = (now - firstTime) / (lastTime - firstTime);
+    const nowX = padding.left + fraction * chartWidth;
+    ctx.save();
+    ctx.strokeStyle = "#ffffff60";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(nowX, padding.top);
+    ctx.lineTo(nowX, padding.top + chartHeight);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = "#ffffff80";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("now", nowX, padding.top - 1);
+  }
+
   // Legend
   ctx.fillStyle = "#8b8fa3";
   ctx.font = "10px system-ui, sans-serif";
