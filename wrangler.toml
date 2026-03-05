@@ -1,5 +1,9 @@
 name = "dynamical-weather-bot"
 compatibility_date = "2025-01-01"
 
+routes = [
+  { pattern = "weather.samn.biz", custom_domain = true },
+]
+
 [assets]
 directory = "./dist"
