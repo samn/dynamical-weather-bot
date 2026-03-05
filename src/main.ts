@@ -3,6 +3,7 @@ import { getGeolocation, zipToLatLon } from "./geo.js";
 import { fetchForecast, fetchRecentWeather } from "./weather.js";
 import { detectAberrations } from "./aberrations.js";
 import { renderChart } from "./chart.js";
+import { getCached, setCache } from "./cache.js";
 
 // DOM elements
 const geolocateBtn = document.getElementById("geolocate-btn") as HTMLButtonElement;
@@ -105,11 +106,18 @@ async function loadForecast(location: LatLon): Promise<void> {
   locationLabel.textContent = `${location.latitude.toFixed(2)}\u00B0N, ${location.longitude.toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
 
   try {
-    // Fetch forecast and recent weather in parallel
-    const [forecast, recentWeather] = await Promise.all([
-      fetchForecast(location),
-      fetchRecentWeather(location),
-    ]);
+    const cached = getCached(location.latitude, location.longitude);
+    let forecast, recentWeather;
+    if (cached) {
+      forecast = cached.forecast;
+      recentWeather = cached.recentWeather;
+    } else {
+      [forecast, recentWeather] = await Promise.all([
+        fetchForecast(location),
+        fetchRecentWeather(location),
+      ]);
+      setCache(location.latitude, location.longitude, forecast, recentWeather);
+    }
 
     // Detect aberrations
     const aberrations = detectAberrations(forecast, recentWeather);
