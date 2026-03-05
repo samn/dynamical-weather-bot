@@ -4,6 +4,14 @@ import { fetchForecast, fetchRecentWeather } from "./weather.js";
 import { detectAberrations } from "./aberrations.js";
 import { renderChart } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
+import {
+  type UnitSystem,
+  getUnitSystem,
+  setUnitSystem,
+  celsiusToFahrenheit,
+  mmhrToInhr,
+  msToMph,
+} from "./units.js";
 
 // DOM elements
 const geolocateBtn = document.getElementById("geolocate-btn") as HTMLButtonElement;
@@ -15,9 +23,12 @@ const loadingEl = document.getElementById("loading") as HTMLDivElement;
 const errorEl = document.getElementById("error") as HTMLDivElement;
 const forecastEl = document.getElementById("forecast") as HTMLDivElement;
 const aberrationsEl = document.getElementById("aberrations") as HTMLElement;
+const metricBtn = document.getElementById("metric-btn") as HTMLButtonElement;
+const imperialBtn = document.getElementById("imperial-btn") as HTMLButtonElement;
 
-/** Store last forecast for re-rendering on resize */
+/** Store last data for re-rendering on resize and unit toggle */
 let lastForecast: ForecastData | null = null;
+let lastRecentWeather: import("./types.js").RecentWeather | null = null;
 
 function setButtonsDisabled(disabled: boolean): void {
   geolocateBtn.disabled = disabled;
@@ -64,12 +75,16 @@ function renderAberrations(aberrations: Aberration[]): void {
 }
 
 function renderCharts(forecast: ForecastData): void {
+  const units = getUnitSystem();
+  const imperial = units === "imperial";
+
   renderChart({
     canvas: document.getElementById("temp-chart") as HTMLCanvasElement,
     data: forecast.temperature,
     label: "Temperature",
-    unit: "\u00B0C",
+    unit: imperial ? "\u00B0F" : "\u00B0C",
     color: "#f5a623",
+    convertValue: imperial ? celsiusToFahrenheit : undefined,
     formatValue: (v) => v.toFixed(0),
   });
 
@@ -77,17 +92,19 @@ function renderCharts(forecast: ForecastData): void {
     canvas: document.getElementById("precip-chart") as HTMLCanvasElement,
     data: forecast.precipitation,
     label: "Precipitation",
-    unit: "mm/h",
+    unit: imperial ? "in/h" : "mm/h",
     color: "#66b3ff",
-    formatValue: (v) => v.toFixed(1),
+    convertValue: imperial ? mmhrToInhr : undefined,
+    formatValue: (v) => v.toFixed(imperial ? 2 : 1),
   });
 
   renderChart({
     canvas: document.getElementById("wind-chart") as HTMLCanvasElement,
     data: forecast.windSpeed,
     label: "Wind Speed",
-    unit: "m/s",
+    unit: imperial ? "mph" : "m/s",
     color: "#81c784",
+    convertValue: imperial ? msToMph : undefined,
     formatValue: (v) => v.toFixed(0),
   });
 
@@ -119,15 +136,18 @@ async function loadForecast(location: LatLon): Promise<void> {
       setCache(location.latitude, location.longitude, forecast, recentWeather);
     }
 
+    // Store for re-rendering on resize and unit toggle
+    lastForecast = forecast;
+    lastRecentWeather = recentWeather;
+
     // Detect aberrations
-    const aberrations = detectAberrations(forecast, recentWeather);
+    const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
     renderAberrations(aberrations);
 
     // Show forecast container before rendering so canvases have dimensions
     showForecast();
 
-    // Render charts and store for resize
-    lastForecast = forecast;
+    // Render charts
     renderCharts(forecast);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error occurred";
@@ -159,6 +179,26 @@ zipForm.addEventListener("submit", async (e) => {
     showError(message);
   }
 });
+
+// Unit toggle
+function syncUnitToggle(): void {
+  const system = getUnitSystem();
+  metricBtn.classList.toggle("active", system === "metric");
+  imperialBtn.classList.toggle("active", system === "imperial");
+}
+
+function switchUnits(system: UnitSystem): void {
+  setUnitSystem(system);
+  syncUnitToggle();
+  if (lastForecast && lastRecentWeather && !forecastEl.classList.contains("hidden")) {
+    renderAberrations(detectAberrations(lastForecast, lastRecentWeather, system));
+    renderCharts(lastForecast);
+  }
+}
+
+syncUnitToggle();
+metricBtn.addEventListener("click", () => switchUnits("metric"));
+imperialBtn.addEventListener("click", () => switchUnits("imperial"));
 
 // Resize handler for charts
 let resizeTimer: ReturnType<typeof setTimeout>;

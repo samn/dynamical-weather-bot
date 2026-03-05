@@ -6,6 +6,8 @@ interface ChartOptions {
   label: string;
   unit: string;
   color: string;
+  /** Convert metric value to display unit (e.g. C→F) */
+  convertValue?: (v: number) => number;
   /** Format value for display */
   formatValue?: (v: number) => string;
 }
@@ -20,7 +22,24 @@ interface ChartOptions {
  * - Value labels on Y axis
  */
 export function renderChart(opts: ChartOptions): void {
-  const { canvas, data, unit, color, formatValue = (v) => v.toFixed(1) } = opts;
+  const {
+    canvas,
+    data: rawData,
+    unit,
+    color,
+    convertValue,
+    formatValue = (v) => v.toFixed(1),
+  } = opts;
+
+  const conv = convertValue ?? ((v: number) => v);
+  const data = rawData.map((p) => ({
+    ...p,
+    median: conv(p.median),
+    p10: conv(p.p10),
+    p90: conv(p.p90),
+    min: conv(p.min),
+    max: conv(p.max),
+  }));
 
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();

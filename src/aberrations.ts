@@ -1,4 +1,5 @@
 import type { ForecastData, RecentWeather, Aberration } from "./types.js";
+import { type UnitSystem, formatTemp, msToMph } from "./units.js";
 
 /**
  * Threshold for temperature aberration (degrees C).
@@ -20,7 +21,11 @@ const CLOUD_CHANGE_THRESHOLD = 0.3;
  * Detect notable weather aberrations by comparing the forecast to recent conditions.
  * Returns a list of user-facing alerts sorted by severity.
  */
-export function detectAberrations(forecast: ForecastData, recent: RecentWeather): Aberration[] {
+export function detectAberrations(
+  forecast: ForecastData,
+  recent: RecentWeather,
+  units: UnitSystem = "metric",
+): Aberration[] {
   const aberrations: Aberration[] = [];
 
   // Analyze temperature
@@ -34,13 +39,13 @@ export function detectAberrations(forecast: ForecastData, recent: RecentWeather)
     aberrations.push({
       type: "warm",
       icon: "\u{2600}\u{FE0F}",
-      message: `Significantly warmer than recent days: forecast avg ${formatTemp(avgForecastTemp)} vs recent ${formatTemp(recent.avgTemperature)} (+${tempDiff.toFixed(1)}\u00B0C)`,
+      message: `Significantly warmer than recent days: forecast avg ${formatTemp(avgForecastTemp, units)} vs recent ${formatTemp(recent.avgTemperature, units)}`,
     });
   } else if (tempDiff < -TEMP_THRESHOLD) {
     aberrations.push({
       type: "cool",
       icon: "\u{1F976}",
-      message: `Significantly colder than recent days: forecast avg ${formatTemp(avgForecastTemp)} vs recent ${formatTemp(recent.avgTemperature)} (${tempDiff.toFixed(1)}\u00B0C)`,
+      message: `Significantly colder than recent days: forecast avg ${formatTemp(avgForecastTemp, units)} vs recent ${formatTemp(recent.avgTemperature, units)}`,
     });
   }
 
@@ -50,7 +55,7 @@ export function detectAberrations(forecast: ForecastData, recent: RecentWeather)
     aberrations.push({
       type: "danger",
       icon: "\u{1F321}\u{FE0F}",
-      message: `Large temperature swing expected: ${formatTemp(minForecastTemp)} to ${formatTemp(maxForecastTemp)} (${tempRange.toFixed(1)}\u00B0C range)`,
+      message: `Large temperature swing expected: ${formatTemp(minForecastTemp, units)} to ${formatTemp(maxForecastTemp, units)}`,
     });
   }
 
@@ -59,17 +64,23 @@ export function detectAberrations(forecast: ForecastData, recent: RecentWeather)
   const maxPrecipP90 = Math.max(...forecast.precipitation.map((p) => p.p90));
   const avgForecastPrecip = average(forecastPrecip);
 
+  const imperial = units === "imperial";
+  const fmtPrecip = (v: number) =>
+    imperial ? `${(v / 25.4).toFixed(2)} in/hr` : `${v.toFixed(1)} mm/hr`;
+  const fmtWind = (v: number) =>
+    imperial ? `${msToMph(v).toFixed(0)} mph` : `${v.toFixed(1)} m/s`;
+
   if (maxPrecipP90 > PRECIP_HIGH_THRESHOLD && recent.avgPrecipitation < 0.5) {
     aberrations.push({
       type: "rain",
       icon: "\u{1F327}\u{FE0F}",
-      message: `Rain likely after dry conditions: up to ${maxPrecipP90.toFixed(1)} mm/hr possible (90th percentile)`,
+      message: `Rain likely after dry conditions: up to ${fmtPrecip(maxPrecipP90)} possible (90th percentile)`,
     });
   } else if (avgForecastPrecip > PRECIP_HIGH_THRESHOLD) {
     aberrations.push({
       type: "rain",
       icon: "\u{1F327}\u{FE0F}",
-      message: `Persistent precipitation expected: avg ${avgForecastPrecip.toFixed(1)} mm/hr`,
+      message: `Persistent precipitation expected: avg ${fmtPrecip(avgForecastPrecip)}`,
     });
   }
 
@@ -79,7 +90,7 @@ export function detectAberrations(forecast: ForecastData, recent: RecentWeather)
     aberrations.push({
       type: "danger",
       icon: "\u{1F32C}\u{FE0F}",
-      message: `Strong winds expected: gusts up to ${maxWindP90.toFixed(1)} m/s (${(maxWindP90 * 2.237).toFixed(0)} mph)`,
+      message: `Strong winds expected: gusts up to ${fmtWind(maxWindP90)}`,
     });
   }
 
@@ -107,9 +118,4 @@ export function detectAberrations(forecast: ForecastData, recent: RecentWeather)
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-function formatTemp(celsius: number): string {
-  const fahrenheit = (celsius * 9) / 5 + 32;
-  return `${celsius.toFixed(1)}\u00B0C (${fahrenheit.toFixed(0)}\u00B0F)`;
 }
