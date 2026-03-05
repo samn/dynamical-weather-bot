@@ -20,10 +20,7 @@ const CLOUD_CHANGE_THRESHOLD = 0.3;
  * Detect notable weather aberrations by comparing the forecast to recent conditions.
  * Returns a list of user-facing alerts sorted by severity.
  */
-export function detectAberrations(
-  forecast: ForecastData,
-  recent: RecentWeather,
-): Aberration[] {
+export function detectAberrations(forecast: ForecastData, recent: RecentWeather): Aberration[] {
   const aberrations: Aberration[] = [];
 
   // Analyze temperature
@@ -113,6 +110,6 @@ function average(values: number[]): number {
 }
 
 function formatTemp(celsius: number): string {
-  const fahrenheit = celsius * 9 / 5 + 32;
+  const fahrenheit = (celsius * 9) / 5 + 32;
   return `${celsius.toFixed(1)}\u00B0C (${fahrenheit.toFixed(0)}\u00B0F)`;
 }

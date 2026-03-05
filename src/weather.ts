@@ -151,7 +151,9 @@ async function fetchAnalysisVariable(
  * Find the index of the most recent init_time in the forecast store.
  * init_time is stored as int64 seconds since epoch.
  */
-async function getLatestInitTimeIndex(store: zarr.FetchStore): Promise<{ index: number; initTime: Date }> {
+async function getLatestInitTimeIndex(
+  store: zarr.FetchStore,
+): Promise<{ index: number; initTime: Date }> {
   const loc = zarr.root(store).resolve("init_time");
   const arr = await zarr.open(loc, { kind: "array" });
   const result = await zarr.get(arr);
@@ -251,10 +253,26 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
   // Fetch all variables in parallel
   const [tempData, precipData, windUData, windVData, cloudData] = await Promise.all([
     fetchForecastVariable(store, "temperature_2m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
-    fetchForecastVariable(store, "precipitation_surface", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
+    fetchForecastVariable(
+      store,
+      "precipitation_surface",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      STEPS_72H,
+    ),
     fetchForecastVariable(store, "wind_u_10m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
     fetchForecastVariable(store, "wind_v_10m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
-    fetchForecastVariable(store, "total_cloud_cover_atmosphere", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
+    fetchForecastVariable(
+      store,
+      "total_cloud_cover_atmosphere",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      STEPS_72H,
+    ),
   ]);
 
   // Compute wind speed from u/v components
@@ -290,7 +308,14 @@ export async function fetchRecentWeather(location: LatLon): Promise<RecentWeathe
     fetchAnalysisVariable(store, "precipitation_surface", latIdx, lonIdx, startIdx, numSteps),
     fetchAnalysisVariable(store, "wind_u_10m", latIdx, lonIdx, startIdx, numSteps),
     fetchAnalysisVariable(store, "wind_v_10m", latIdx, lonIdx, startIdx, numSteps),
-    fetchAnalysisVariable(store, "total_cloud_cover_atmosphere", latIdx, lonIdx, startIdx, numSteps),
+    fetchAnalysisVariable(
+      store,
+      "total_cloud_cover_atmosphere",
+      latIdx,
+      lonIdx,
+      startIdx,
+      numSteps,
+    ),
   ]);
 
   const windSpeeds = windUData.map((u, i) => windSpeed(u, windVData[i]!));

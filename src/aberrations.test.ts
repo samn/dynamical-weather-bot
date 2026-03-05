@@ -16,15 +16,20 @@ function makePoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
 }
 
 function makeForecast(overrides: Partial<ForecastData> = {}): ForecastData {
-  const defaultPoints = Array.from({ length: 24 }, (_, i) =>
-    makePoint({ hoursFromNow: i * 3 }),
-  );
+  const defaultPoints = Array.from({ length: 24 }, (_, i) => makePoint({ hoursFromNow: i * 3 }));
   return {
     location: { latitude: 40, longitude: -74 },
     temperature: defaultPoints,
     precipitation: defaultPoints.map((p) => ({ ...p, median: 0, p10: 0, p90: 0, min: 0, max: 0 })),
     windSpeed: defaultPoints.map((p) => ({ ...p, median: 3, p10: 2, p90: 5, min: 1, max: 6 })),
-    cloudCover: defaultPoints.map((p) => ({ ...p, median: 0.5, p10: 0.3, p90: 0.7, min: 0.2, max: 0.8 })),
+    cloudCover: defaultPoints.map((p) => ({
+      ...p,
+      median: 0.5,
+      p10: 0.3,
+      p90: 0.7,
+      min: 0.2,
+      max: 0.8,
+    })),
     ...overrides,
   };
 }
