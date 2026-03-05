@@ -45,11 +45,6 @@ export function percentile(sorted: number[], p: number): number {
   return loVal + (hiVal - loVal) * (idx - lo);
 }
 
-/** Convert temperature from Kelvin to Celsius */
-export function kelvinToCelsius(k: number): number {
-  return k - 273.15;
-}
-
 /** Compute wind speed from u and v components */
 export function windSpeed(u: number, v: number): number {
   return Math.sqrt(u * u + v * v);
@@ -281,8 +276,8 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
     ),
   ]);
 
-  // Convert temperature from Kelvin to Celsius
-  const tempCelsius: number[][] = tempData.map((row) => row.map(kelvinToCelsius));
+  // temperature_2m is already in Celsius from dynamical.org
+  const tempCelsius: number[][] = tempData;
 
   // Compute wind speed from u/v components
   const windSpeedData: number[][] = windUData.map((uRow, e) =>
@@ -330,7 +325,7 @@ export async function fetchRecentWeather(location: LatLon): Promise<RecentWeathe
   const windSpeeds = windUData.map((u, i) => windSpeed(u, windVData[i]!));
 
   return {
-    avgTemperature: avg(tempData.map(kelvinToCelsius)),
+    avgTemperature: avg(tempData),
     avgPrecipitation: avg(precipData.map(precipToMmHr)),
     avgWindSpeed: avg(windSpeeds),
     avgCloudCover: avg(cloudData.map(cloudCoverToFraction)),
