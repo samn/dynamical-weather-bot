@@ -24,6 +24,10 @@ Run `mise install` to set up the project toolchain (Node 24, prek). Then run `pr
 
 Pre-commit hooks run oxlint, typecheck, and tests on all commits.
 
+## Pre-commit Checks
+
+**IMPORTANT:** Before every commit, you MUST run `npm run check` and fix all errors. This runs formatting, type checking, linting, and tests. Do not commit until all checks pass. Do not skip or bypass these checks (e.g. never use `--no-verify`).
+
 ## Architecture
 
 **Data flow:** User provides location (geolocation or ZIP) → fetch GEFS forecast + recent analysis from dynamical.org Zarr stores → compute ensemble statistics → detect aberrations vs recent weather → render canvas charts.
