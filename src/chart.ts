@@ -1,5 +1,17 @@
 import type { ForecastPoint } from "./types.js";
 
+/** A horizontal band drawn behind the chart to indicate intensity levels */
+export interface IntensityBand {
+  /** Lower bound of the band (display units) */
+  min: number;
+  /** Upper bound of the band (display units) */
+  max: number;
+  /** Label shown on the y-axis */
+  label: string;
+  /** Background fill colour (use a semi-transparent value) */
+  color: string;
+}
+
 interface ChartOptions {
   canvas: HTMLCanvasElement;
   data: ForecastPoint[];
@@ -10,6 +22,8 @@ interface ChartOptions {
   convertValue?: (v: number) => number;
   /** Format value for display */
   formatValue?: (v: number) => string;
+  /** Optional intensity bands drawn as background shading with y-axis labels */
+  intensityBands?: IntensityBand[];
 }
 
 interface ChartState {
@@ -27,6 +41,7 @@ interface ChartState {
   compact: boolean;
   fontSize: number;
   smallFontSize: number;
+  intensityBands?: IntensityBand[];
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
 }
@@ -60,6 +75,7 @@ export function renderChart(opts: ChartOptions): void {
     color,
     convertValue,
     formatValue = (v) => v.toFixed(1),
+    intensityBands,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -86,11 +102,12 @@ export function renderChart(opts: ChartOptions): void {
   const displayWidth = rect.width;
   const displayHeight = rect.height;
   const compact = displayWidth < 400;
+  const hasBands = intensityBands && intensityBands.length > 0;
   const padding = {
     top: 10,
     right: compact ? 8 : 16,
     bottom: compact ? 28 : 32,
-    left: compact ? 40 : 50,
+    left: hasBands ? (compact ? 56 : 72) : compact ? 40 : 50,
   };
   const fontSize = compact ? 9 : 11;
   const smallFontSize = compact ? 8 : 10;
@@ -108,12 +125,37 @@ export function renderChart(opts: ChartOptions): void {
   yMin -= yPad;
   yMax += yPad;
 
+  // When intensity bands are present, ensure yMin starts at 0 and yMax
+  // covers at least the second-to-last band boundary so labels are visible.
+  if (hasBands) {
+    yMin = 0;
+    // Find the smallest band max that is above all data
+    const dataMax = Math.max(...data.map((p) => p.max));
+    const bandCeiling = intensityBands.find((b) => b.max >= dataMax)?.max;
+    if (bandCeiling !== undefined) {
+      yMax = Math.max(yMax, bandCeiling);
+    }
+  }
+
   const xScale = (i: number): number => padding.left + (i / (data.length - 1)) * chartWidth;
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
   // Clear
   ctx.clearRect(0, 0, displayWidth, displayHeight);
+
+  // Draw intensity band shading (behind everything)
+  if (hasBands) {
+    for (const band of intensityBands) {
+      const bandTop = Math.max(band.min, yMin);
+      const bandBottom = Math.min(band.max, yMax);
+      if (bandTop >= yMax || bandBottom <= yMin) continue;
+      const y1 = yScale(bandBottom);
+      const y2 = yScale(bandTop);
+      ctx.fillStyle = band.color;
+      ctx.fillRect(padding.left, y1, chartWidth, y2 - y1);
+    }
+  }
 
   // Draw min-max band
   ctx.fillStyle = hexToRgba(color, 0.08);
@@ -171,18 +213,41 @@ export function renderChart(opts: ChartOptions): void {
   ctx.font = `${fontSize}px system-ui, sans-serif`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  const yTicks = compact ? 4 : 5;
-  for (let i = 0; i <= yTicks; i++) {
-    const v = yMin + (i / yTicks) * (yMax - yMin);
-    const y = yScale(v);
-    ctx.fillText(compact ? formatValue(v) : `${formatValue(v)} ${unit}`, padding.left - 4, y);
 
-    // Grid line
-    ctx.strokeStyle = "#1a1d2720";
-    ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(padding.left + chartWidth, y);
-    ctx.stroke();
+  if (hasBands) {
+    // Draw one label per intensity band, centred vertically in the visible portion
+    for (const band of intensityBands) {
+      const visibleMin = Math.max(band.min, yMin);
+      const visibleMax = Math.min(band.max, yMax);
+      if (visibleMin >= yMax || visibleMax <= yMin) continue;
+      const midValue = (visibleMin + visibleMax) / 2;
+      const y = yScale(midValue);
+      ctx.fillStyle = "#8b8fa3";
+      ctx.fillText(band.label, padding.left - 4, y);
+
+      // Grid line at band boundary (skip the bottom boundary at 0)
+      if (band.min > yMin) {
+        ctx.strokeStyle = "#1a1d2730";
+        ctx.beginPath();
+        ctx.moveTo(padding.left, yScale(band.min));
+        ctx.lineTo(padding.left + chartWidth, yScale(band.min));
+        ctx.stroke();
+      }
+    }
+  } else {
+    const yTicks = compact ? 4 : 5;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = yMin + (i / yTicks) * (yMax - yMin);
+      const y = yScale(v);
+      ctx.fillText(compact ? formatValue(v) : `${formatValue(v)} ${unit}`, padding.left - 4, y);
+
+      // Grid line
+      ctx.strokeStyle = "#1a1d2720";
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(padding.left + chartWidth, y);
+      ctx.stroke();
+    }
   }
 
   // X axis labels (show every N hours)
@@ -243,6 +308,7 @@ export function renderChart(opts: ChartOptions): void {
     compact,
     fontSize,
     smallFontSize,
+    intensityBands,
     baseImage,
   });
 
@@ -372,6 +438,14 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
     `Median: ${formatValue(point.median)}${unitSuffix}`,
     `Range: ${formatValue(point.p10)} – ${formatValue(point.p90)}${unitSuffix}`,
   ];
+
+  // Add intensity label when bands are configured
+  if (state.intensityBands) {
+    const band = state.intensityBands.find((b) => point.median >= b.min && point.median < b.max);
+    if (band) {
+      lines.push(band.label);
+    }
+  }
 
   // Measure tooltip
   const tooltipFont = compact ? 9 : 11;

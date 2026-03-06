@@ -2,7 +2,7 @@ import type { LatLon, ForecastData, Aberration } from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
 import { fetchForecast, fetchRecentWeather } from "./weather.js";
 import { detectAberrations } from "./aberrations.js";
-import { renderChart } from "./chart.js";
+import { renderChart, type IntensityBand } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
 import {
   type UnitSystem,
@@ -74,6 +74,37 @@ function renderAberrations(aberrations: Aberration[]): void {
   }
 }
 
+/** Precipitation intensity bands in mm/h (metric) */
+const PRECIP_BANDS_METRIC: IntensityBand[] = [
+  { min: 0, max: 0.5, label: "Drizzle", color: "rgba(102,179,255,0.04)" },
+  { min: 0.5, max: 2.5, label: "Light rain", color: "rgba(102,179,255,0.10)" },
+  { min: 2.5, max: 7.5, label: "Moderate", color: "rgba(102,179,255,0.18)" },
+  { min: 7.5, max: 50, label: "Heavy rain", color: "rgba(102,179,255,0.28)" },
+];
+
+/** Precipitation intensity bands in in/h (imperial) */
+const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
+  { min: 0, max: mmhrToInhr(0.5), label: "Drizzle", color: "rgba(102,179,255,0.04)" },
+  {
+    min: mmhrToInhr(0.5),
+    max: mmhrToInhr(2.5),
+    label: "Light rain",
+    color: "rgba(102,179,255,0.10)",
+  },
+  {
+    min: mmhrToInhr(2.5),
+    max: mmhrToInhr(7.5),
+    label: "Moderate",
+    color: "rgba(102,179,255,0.18)",
+  },
+  {
+    min: mmhrToInhr(7.5),
+    max: mmhrToInhr(50),
+    label: "Heavy rain",
+    color: "rgba(102,179,255,0.28)",
+  },
+];
+
 function renderCharts(forecast: ForecastData): void {
   const units = getUnitSystem();
   const imperial = units === "imperial";
@@ -96,6 +127,7 @@ function renderCharts(forecast: ForecastData): void {
     color: "#66b3ff",
     convertValue: imperial ? mmhrToInhr : undefined,
     formatValue: (v) => v.toFixed(imperial ? 2 : 1),
+    intensityBands: imperial ? PRECIP_BANDS_IMPERIAL : PRECIP_BANDS_METRIC,
   });
 
   renderChart({
