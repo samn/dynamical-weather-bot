@@ -85,9 +85,24 @@ const PRECIP_BANDS_METRIC: IntensityBand[] = [
 /** Precipitation intensity bands in in/h (imperial) */
 const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
   { min: 0, max: mmhrToInhr(0.5), label: "Drizzle", color: "rgba(102,179,255,0.04)" },
-  { min: mmhrToInhr(0.5), max: mmhrToInhr(2.5), label: "Light rain", color: "rgba(102,179,255,0.10)" },
-  { min: mmhrToInhr(2.5), max: mmhrToInhr(7.5), label: "Moderate", color: "rgba(102,179,255,0.18)" },
-  { min: mmhrToInhr(7.5), max: mmhrToInhr(50), label: "Heavy rain", color: "rgba(102,179,255,0.28)" },
+  {
+    min: mmhrToInhr(0.5),
+    max: mmhrToInhr(2.5),
+    label: "Light rain",
+    color: "rgba(102,179,255,0.10)",
+  },
+  {
+    min: mmhrToInhr(2.5),
+    max: mmhrToInhr(7.5),
+    label: "Moderate",
+    color: "rgba(102,179,255,0.18)",
+  },
+  {
+    min: mmhrToInhr(7.5),
+    max: mmhrToInhr(50),
+    label: "Heavy rain",
+    color: "rgba(102,179,255,0.28)",
+  },
 ];
 
 function renderCharts(forecast: ForecastData): void {

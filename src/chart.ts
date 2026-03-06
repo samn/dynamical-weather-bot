@@ -441,9 +441,7 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
 
   // Add intensity label when bands are configured
   if (state.intensityBands) {
-    const band = state.intensityBands.find(
-      (b) => point.median >= b.min && point.median < b.max,
-    );
+    const band = state.intensityBands.find((b) => point.median >= b.min && point.median < b.max);
     if (band) {
       lines.push(band.label);
     }
