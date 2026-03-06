@@ -19,6 +19,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
       - name: Check formatting
         run: npm run fmt:check
 
