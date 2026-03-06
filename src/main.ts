@@ -155,10 +155,28 @@ async function loadForecast(location: LatLon): Promise<void> {
   }
 }
 
+/** Update the URL query parameter for zip code without reloading */
+function setZipInUrl(zip: string | null): void {
+  const url = new URL(window.location.href);
+  if (zip) {
+    url.searchParams.set("zip", zip);
+  } else {
+    url.searchParams.delete("zip");
+  }
+  window.history.replaceState(null, "", url.toString());
+}
+
+/** Read zip code from the current URL query parameters */
+function getZipFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("zip");
+}
+
 // Event handlers
 geolocateBtn.addEventListener("click", async () => {
   try {
     showLoading();
+    setZipInUrl(null);
     const location = await getGeolocation();
     await loadForecast(location);
   } catch (err) {
@@ -173,6 +191,7 @@ zipForm.addEventListener("submit", async (e) => {
   try {
     showLoading();
     const location = await zipToLatLon(zip);
+    setZipInUrl(zip);
     await loadForecast(location);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid ZIP code";
@@ -210,3 +229,16 @@ window.addEventListener("resize", () => {
     }
   }, 250);
 });
+
+// On load: if a zip code is in the URL, use it automatically
+const initialZip = getZipFromUrl();
+if (initialZip) {
+  zipInput.value = initialZip;
+  zipToLatLon(initialZip).then(
+    (location) => loadForecast(location),
+    (err) => {
+      const message = err instanceof Error ? err.message : "Invalid ZIP code";
+      showError(message);
+    },
+  );
+}
