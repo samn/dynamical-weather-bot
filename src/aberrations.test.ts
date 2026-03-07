@@ -19,6 +19,7 @@ function makeForecast(overrides: Partial<ForecastData> = {}): ForecastData {
   const defaultPoints = Array.from({ length: 24 }, (_, i) => makePoint({ hoursFromNow: i * 3 }));
   return {
     location: { latitude: 40, longitude: -74 },
+    initTime: "2026-03-04T00:00:00.000Z",
     temperature: defaultPoints,
     precipitation: defaultPoints.map((p) => ({ ...p, median: 0, p10: 0, p90: 0, min: 0, max: 0 })),
     windSpeed: defaultPoints.map((p) => ({ ...p, median: 3, p10: 2, p90: 5, min: 1, max: 6 })),

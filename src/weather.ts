@@ -236,6 +236,13 @@ function toForecastPoints(
   return points;
 }
 
+/** Fetch just the latest forecast init time (lightweight metadata check) */
+export async function fetchLatestInitTime(): Promise<string> {
+  const store = new zarr.FetchStore(FORECAST_STORE_URL);
+  const { initTime } = await getLatestInitTimeIndex(store);
+  return initTime.toISOString();
+}
+
 /** Fetch the full 72-hour probabilistic forecast for a location */
 export async function fetchForecast(location: LatLon): Promise<ForecastData> {
   const latIdx = latToIndex(location.latitude);
@@ -292,6 +299,7 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
 
   return {
     location,
+    initTime: initTime.toISOString(),
     temperature: toForecastPoints(tempCelsius, leadTimeHours, initTime),
     precipitation: toForecastPoints(precipMmHr, leadTimeHours, initTime),
     windSpeed: toForecastPoints(windSpeedData, leadTimeHours, initTime),

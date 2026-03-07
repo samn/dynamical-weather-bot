@@ -4,6 +4,7 @@ import type { ForecastData, RecentWeather } from "./types.js";
 
 const mockForecast: ForecastData = {
   location: { latitude: 40, longitude: -74 },
+  initTime: "2026-03-07T00:00:00.000Z",
   temperature: [],
   precipitation: [],
   windSpeed: [],
@@ -52,7 +53,7 @@ describe("setCache / getCached", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+    vi.setSystemTime(Date.now() + 49 * 60 * 60 * 1000);
 
     expect(getCached(40, -74)).toBeNull();
 
@@ -63,7 +64,7 @@ describe("setCache / getCached", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+    vi.setSystemTime(Date.now() + 49 * 60 * 60 * 1000);
 
     setCache(50, 10, mockForecast, mockRecent);
 
@@ -79,7 +80,7 @@ describe("setCache / getCached", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now() + 29 * 60 * 1000);
+    vi.setSystemTime(Date.now() + 47 * 60 * 60 * 1000);
 
     expect(getCached(40, -74)).not.toBeNull();
 
