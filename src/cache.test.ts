@@ -91,4 +91,120 @@ describe("setCache / getCached", () => {
     storage.set("weather-cache", "not-valid-json");
     expect(getCached(40, -74)).toBeNull();
   });
+
+  it("preserves initTime through cache roundtrip", () => {
+    const forecast: ForecastData = {
+      ...mockForecast,
+      initTime: "2026-03-06T18:00:00.000Z",
+    };
+    setCache(40, -74, forecast, mockRecent);
+    const result = getCached(40, -74);
+    expect(result!.forecast.initTime).toBe("2026-03-06T18:00:00.000Z");
+  });
+
+  it("stores multiple locations independently", () => {
+    const forecastNY: ForecastData = {
+      ...mockForecast,
+      location: { latitude: 40.71, longitude: -74.01 },
+      initTime: "2026-03-07T00:00:00.000Z",
+    };
+    const forecastLA: ForecastData = {
+      ...mockForecast,
+      location: { latitude: 34.05, longitude: -118.24 },
+      initTime: "2026-03-07T06:00:00.000Z",
+    };
+
+    setCache(40.71, -74.01, forecastNY, mockRecent);
+    setCache(34.05, -118.24, forecastLA, mockRecent);
+
+    const ny = getCached(40.71, -74.01);
+    const la = getCached(34.05, -118.24);
+
+    expect(ny!.forecast.initTime).toBe("2026-03-07T00:00:00.000Z");
+    expect(la!.forecast.initTime).toBe("2026-03-07T06:00:00.000Z");
+  });
+
+  it("overwrites existing entry for the same location", () => {
+    const oldForecast: ForecastData = { ...mockForecast, initTime: "2026-03-06T00:00:00.000Z" };
+    const newForecast: ForecastData = { ...mockForecast, initTime: "2026-03-07T12:00:00.000Z" };
+
+    setCache(40, -74, oldForecast, mockRecent);
+    setCache(40, -74, newForecast, mockRecent);
+
+    const result = getCached(40, -74);
+    expect(result!.forecast.initTime).toBe("2026-03-07T12:00:00.000Z");
+  });
+
+  it("is still fresh at exactly the 48-hour boundary", () => {
+    setCache(40, -74, mockForecast, mockRecent);
+
+    vi.useFakeTimers();
+    // At exactly 48 hours — not yet expired (uses > not >=)
+    vi.setSystemTime(Date.now() + 48 * 60 * 60 * 1000);
+    expect(getCached(40, -74)).not.toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("expires 1ms past the 48-hour boundary", () => {
+    setCache(40, -74, mockForecast, mockRecent);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 48 * 60 * 60 * 1000 + 1);
+    expect(getCached(40, -74)).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("keeps non-expired entries when evicting expired ones", () => {
+    setCache(40, -74, mockForecast, mockRecent);
+
+    vi.useFakeTimers();
+    // Advance 24 hours — first entry still fresh
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    setCache(50, 10, mockForecast, mockRecent);
+
+    // Advance another 25 hours — first entry now expired (49h total), second still fresh (25h)
+    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+    setCache(60, 20, mockForecast, mockRecent);
+
+    const raw = JSON.parse(storage.get("weather-cache")!);
+    const keys = Object.keys(raw);
+    expect(keys).toContain("50.00,10.00");
+    expect(keys).toContain("60.00,20.00");
+    expect(keys).not.toContain("40.00,-74.00");
+
+    vi.useRealTimers();
+  });
+
+  it("cleans up expired entry from store on read", () => {
+    setCache(40, -74, mockForecast, mockRecent);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 49 * 60 * 60 * 1000);
+
+    getCached(40, -74); // should delete expired entry
+
+    const raw = JSON.parse(storage.get("weather-cache")!);
+    expect(Object.keys(raw)).toHaveLength(0);
+
+    vi.useRealTimers();
+  });
+
+  it("rounds location keys to 2 decimal places", () => {
+    setCache(40.714, -74.006, mockForecast, mockRecent);
+
+    const raw = JSON.parse(storage.get("weather-cache")!);
+    expect(Object.keys(raw)).toEqual(["40.71,-74.01"]);
+
+    // Can retrieve with the same coordinates
+    expect(getCached(40.714, -74.006)).not.toBeNull();
+  });
+
+  it("handles corrupted cache entry gracefully on write", () => {
+    storage.set("weather-cache", "{{invalid}}");
+    // Should not throw, should just create a fresh cache
+    expect(() => setCache(40, -74, mockForecast, mockRecent)).not.toThrow();
+    expect(getCached(40, -74)).not.toBeNull();
+  });
 });

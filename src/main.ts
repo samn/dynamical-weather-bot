@@ -4,6 +4,7 @@ import { fetchForecast, fetchRecentWeather, fetchLatestInitTime } from "./weathe
 import { detectAberrations } from "./aberrations.js";
 import { renderChart, type IntensityBand } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
+import { formatInitTime } from "./format.js";
 import {
   type UnitSystem,
   getUnitSystem,
@@ -31,11 +32,6 @@ const imperialBtn = document.getElementById("imperial-btn") as HTMLButtonElement
 /** Store last data for re-rendering on resize and unit toggle */
 let lastForecast: ForecastData | null = null;
 let lastRecentWeather: import("./types.js").RecentWeather | null = null;
-
-function formatInitTime(iso: string): string {
-  const d = new Date(iso);
-  return `Forecast initialized ${d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}`;
-}
 
 function setButtonsDisabled(disabled: boolean): void {
   geolocateBtn.disabled = disabled;
