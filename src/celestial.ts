@@ -217,7 +217,7 @@ export function getCelestialEvents(
 
     const moonrise = findMoonrise(d, lat, lon);
     if (moonrise && moonrise >= start && moonrise <= end) {
-      events.push({ time: moonrise.toISOString(), type: "moonrise", icon: "\u263E" });
+      events.push({ time: moonrise.toISOString(), type: "moonrise", icon: "\uD83C\uDF15" });
     }
   }
 
