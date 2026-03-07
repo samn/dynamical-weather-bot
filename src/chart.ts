@@ -1,4 +1,5 @@
 import type { ForecastPoint } from "./types.js";
+import type { CelestialEvent } from "./celestial.js";
 
 /** A horizontal band drawn behind the chart to indicate intensity levels */
 export interface IntensityBand {
@@ -24,6 +25,8 @@ interface ChartOptions {
   formatValue?: (v: number) => string;
   /** Optional intensity bands drawn as background shading with y-axis labels */
   intensityBands?: IntensityBand[];
+  /** Optional celestial events (sunrise, sunset, moonrise) to mark on the chart */
+  celestialEvents?: CelestialEvent[];
 }
 
 interface ChartState {
@@ -76,6 +79,7 @@ export function renderChart(opts: ChartOptions): void {
     convertValue,
     formatValue = (v) => v.toFixed(1),
     intensityBands,
+    celestialEvents,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -289,6 +293,40 @@ export function renderChart(opts: ChartOptions): void {
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText("now", nowX, padding.top - 1);
+  }
+
+  // Draw celestial event markers (sunrise, sunset, moonrise)
+  if (celestialEvents && celestialEvents.length > 0) {
+    for (const event of celestialEvents) {
+      const eventTime = new Date(event.time).getTime();
+      if (eventTime < firstTime || eventTime > lastTime) continue;
+      const frac = (eventTime - firstTime) / (lastTime - firstTime);
+      const evX = padding.left + frac * chartWidth;
+
+      // Dashed vertical line
+      ctx.save();
+      ctx.strokeStyle =
+        event.type === "sunrise"
+          ? "#f5a62340"
+          : event.type === "sunset"
+            ? "#7b68ee40"
+            : "#b0bec540";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(evX, padding.top);
+      ctx.lineTo(evX, padding.top + chartHeight);
+      ctx.stroke();
+      ctx.restore();
+
+      // Icon below the x-axis
+      ctx.fillStyle =
+        event.type === "sunrise" ? "#f5a623" : event.type === "sunset" ? "#7b68ee" : "#b0bec5";
+      ctx.font = `${compact ? 9 : 12}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText(event.icon, evX, padding.top + chartHeight + 1);
+    }
   }
 
   // Save base image and chart state for tooltip interaction
