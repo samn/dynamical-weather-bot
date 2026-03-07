@@ -25,6 +25,8 @@ export interface ForecastPoint {
 /** All forecast variables for a location */
 export interface ForecastData {
   location: LatLon;
+  /** ISO timestamp of the forecast model initialization time */
+  initTime: string;
   /** Temperature in degrees C */
   temperature: ForecastPoint[];
   /** Precipitation rate in mm/hr */

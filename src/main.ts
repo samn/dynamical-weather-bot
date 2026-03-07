@@ -1,9 +1,10 @@
 import type { LatLon, ForecastData, Aberration } from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
-import { fetchForecast, fetchRecentWeather } from "./weather.js";
+import { fetchForecast, fetchRecentWeather, fetchLatestInitTime } from "./weather.js";
 import { detectAberrations } from "./aberrations.js";
 import { renderChart, type IntensityBand } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
+import { formatInitTime } from "./format.js";
 import {
   type UnitSystem,
   getUnitSystem,
@@ -23,6 +24,8 @@ const loadingEl = document.getElementById("loading") as HTMLDivElement;
 const errorEl = document.getElementById("error") as HTMLDivElement;
 const forecastEl = document.getElementById("forecast") as HTMLDivElement;
 const aberrationsEl = document.getElementById("aberrations") as HTMLElement;
+const initTimeLabel = document.getElementById("init-time-label") as HTMLSpanElement;
+const updatingIndicator = document.getElementById("updating-indicator") as HTMLSpanElement;
 const metricBtn = document.getElementById("metric-btn") as HTMLButtonElement;
 const imperialBtn = document.getElementById("imperial-btn") as HTMLButtonElement;
 
@@ -150,13 +153,43 @@ function renderCharts(forecast: ForecastData): void {
   });
 }
 
+async function checkForNewerForecast(location: LatLon, cachedInitTime: string): Promise<void> {
+  try {
+    const latestInitTime = await fetchLatestInitTime();
+    if (latestInitTime <= cachedInitTime) return;
+
+    // Newer forecast available — show updating indicator and refetch
+    updatingIndicator.classList.remove("hidden");
+
+    const [forecast, recentWeather] = await Promise.all([
+      fetchForecast(location),
+      fetchRecentWeather(location),
+    ]);
+    setCache(location.latitude, location.longitude, forecast, recentWeather);
+
+    lastForecast = forecast;
+    lastRecentWeather = recentWeather;
+
+    initTimeLabel.textContent = formatInitTime(forecast.initTime);
+    updatingIndicator.classList.add("hidden");
+
+    const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
+    renderAberrations(aberrations);
+    renderCharts(forecast);
+  } catch {
+    // Background refresh failed — keep showing existing data
+    updatingIndicator.classList.add("hidden");
+  }
+}
+
 async function loadForecast(location: LatLon): Promise<void> {
   showLoading();
   locationLabel.textContent = `${location.latitude.toFixed(2)}\u00B0N, ${location.longitude.toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
 
   try {
     const cached = getCached(location.latitude, location.longitude);
-    let forecast, recentWeather;
+    let forecast: ForecastData;
+    let recentWeather: import("./types.js").RecentWeather;
     if (cached) {
       forecast = cached.forecast;
       recentWeather = cached.recentWeather;
@@ -172,6 +205,9 @@ async function loadForecast(location: LatLon): Promise<void> {
     lastForecast = forecast;
     lastRecentWeather = recentWeather;
 
+    // Display init time
+    initTimeLabel.textContent = formatInitTime(forecast.initTime);
+
     // Detect aberrations
     const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
     renderAberrations(aberrations);
@@ -181,6 +217,9 @@ async function loadForecast(location: LatLon): Promise<void> {
 
     // Render charts
     renderCharts(forecast);
+
+    // Always check for newer init time in the background
+    checkForNewerForecast(location, forecast.initTime);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error occurred";
     showError(`Failed to load forecast: ${message}`);
