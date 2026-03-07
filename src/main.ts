@@ -3,6 +3,7 @@ import { getGeolocation, zipToLatLon } from "./geo.js";
 import { fetchForecast, fetchRecentWeather } from "./weather.js";
 import { detectAberrations } from "./aberrations.js";
 import { renderChart, type IntensityBand } from "./chart.js";
+import { getCelestialEvents, type CelestialEvent } from "./celestial.js";
 import { getCached, setCache } from "./cache.js";
 import {
   type UnitSystem,
@@ -105,9 +106,23 @@ const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
   },
 ];
 
+function computeCelestialEvents(forecast: ForecastData): CelestialEvent[] {
+  const points = forecast.temperature;
+  if (points.length === 0) return [];
+  const startTime = points[0]!.time;
+  const endTime = points[points.length - 1]!.time;
+  return getCelestialEvents(
+    forecast.location.latitude,
+    forecast.location.longitude,
+    startTime,
+    endTime,
+  );
+}
+
 function renderCharts(forecast: ForecastData): void {
   const units = getUnitSystem();
   const imperial = units === "imperial";
+  const celestialEvents = computeCelestialEvents(forecast);
 
   renderChart({
     canvas: document.getElementById("temp-chart") as HTMLCanvasElement,
@@ -117,6 +132,7 @@ function renderCharts(forecast: ForecastData): void {
     color: "#f5a623",
     convertValue: imperial ? celsiusToFahrenheit : undefined,
     formatValue: (v) => v.toFixed(0),
+    celestialEvents,
   });
 
   renderChart({
@@ -128,6 +144,7 @@ function renderCharts(forecast: ForecastData): void {
     convertValue: imperial ? mmhrToInhr : undefined,
     formatValue: (v) => v.toFixed(imperial ? 2 : 1),
     intensityBands: imperial ? PRECIP_BANDS_IMPERIAL : PRECIP_BANDS_METRIC,
+    celestialEvents,
   });
 
   renderChart({
@@ -138,6 +155,7 @@ function renderCharts(forecast: ForecastData): void {
     color: "#81c784",
     convertValue: imperial ? msToMph : undefined,
     formatValue: (v) => v.toFixed(0),
+    celestialEvents,
   });
 
   renderChart({
@@ -147,6 +165,7 @@ function renderCharts(forecast: ForecastData): void {
     unit: "",
     color: "#b0bec5",
     formatValue: (v) => `${(v * 100).toFixed(0)}%`,
+    celestialEvents,
   });
 }
 
