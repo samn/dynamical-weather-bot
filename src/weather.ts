@@ -8,8 +8,14 @@ const FORECAST_STORE_URL =
 const ANALYSIS_STORE_URL =
   "https://data.dynamical.org/noaa/gefs/analysis/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
 
-/** Number of 3-hourly steps to cover 72 hours */
-const STEPS_72H = 24; // 72 / 3
+/** Number of 3-hourly steps to cover 72 hours of future forecast */
+const FUTURE_STEPS = 24; // 72 / 3
+
+/** Number of past 3-hourly steps to keep for context around "now" */
+const CONTEXT_STEPS = 1;
+
+/** Hours per forecast step */
+const HOURS_PER_STEP = 3;
 
 /** Number of recent days to use for aberration comparison */
 const RECENT_DAYS = 7;
@@ -96,16 +102,17 @@ async function fetchForecastVariable(
   latIdx: number,
   lonIdx: number,
   numEnsembleMembers: number,
+  leadTimeStart: number,
   numSteps: number,
 ): Promise<number[][]> {
   const loc = zarr.root(store).resolve(varName);
   const arr = await zarr.open(loc, { kind: "array" });
 
-  // Fetch: specific init_time, all ensemble members, first numSteps lead times, specific lat/lon
+  // Fetch: specific init_time, all ensemble members, lead times from leadTimeStart, specific lat/lon
   const result = await zarr.get(arr, [
     initTimeIdx,
     zarr.slice(numEnsembleMembers),
-    zarr.slice(numSteps),
+    zarr.slice(leadTimeStart, leadTimeStart + numSteps),
     latIdx,
     lonIdx,
   ]);
@@ -168,10 +175,14 @@ async function getLatestInitTimeIndex(
  * Get the lead_time values (as hours from init_time).
  * lead_time is stored as int64 seconds.
  */
-async function getLeadTimeHours(store: zarr.FetchStore, numSteps: number): Promise<number[]> {
+async function getLeadTimeHours(
+  store: zarr.FetchStore,
+  startStep: number,
+  numSteps: number,
+): Promise<number[]> {
   const loc = zarr.root(store).resolve("lead_time");
   const arr = await zarr.open(loc, { kind: "array" });
-  const result = await zarr.get(arr, [zarr.slice(numSteps)]);
+  const result = await zarr.get(arr, [zarr.slice(startStep, startStep + numSteps)]);
   const data = coordToNumbers(result.data);
   // Seconds -> hours
   return data.map((s) => s / 3600);
@@ -243,24 +254,48 @@ export async function fetchLatestInitTime(): Promise<string> {
   return initTime.toISOString();
 }
 
-/** Fetch the full 72-hour probabilistic forecast for a location */
+/**
+ * Compute the lead-time window that prioritises future hours.
+ * Keeps a small number of past steps for context around "now", then fetches
+ * enough future steps to cover FUTURE_STEPS worth of upcoming forecast.
+ */
+export function computeLeadTimeWindow(initTime: Date): { startStep: number; numSteps: number } {
+  const elapsedHours = (Date.now() - initTime.getTime()) / 3_600_000;
+  const elapsedSteps = Math.floor(elapsedHours / HOURS_PER_STEP);
+
+  // Start a few steps before now for context, but never before step 0
+  const startStep = Math.max(0, elapsedSteps - CONTEXT_STEPS);
+  const numSteps = startStep + FUTURE_STEPS + CONTEXT_STEPS;
+  return { startStep, numSteps: numSteps - startStep };
+}
+
+/** Fetch the probabilistic forecast for a location, prioritising future hours */
 export async function fetchForecast(location: LatLon): Promise<ForecastData> {
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
 
   const store = new zarr.FetchStore(FORECAST_STORE_URL);
 
-  // Get the latest init time and lead time hours
-  const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
-    getLatestInitTimeIndex(store),
-    getLeadTimeHours(store, STEPS_72H),
-  ]);
+  // Get the latest init time first so we can compute the lead-time window
+  const { index: initIdx, initTime } = await getLatestInitTimeIndex(store);
+  const { startStep, numSteps } = computeLeadTimeWindow(initTime);
+
+  const leadTimeHours = await getLeadTimeHours(store, startStep, numSteps);
 
   const numEnsemble = 31;
 
   // Fetch all variables in parallel
   const [tempData, precipData, windUData, windVData, cloudData] = await Promise.all([
-    fetchForecastVariable(store, "temperature_2m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
+    fetchForecastVariable(
+      store,
+      "temperature_2m",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      startStep,
+      numSteps,
+    ),
     fetchForecastVariable(
       store,
       "precipitation_surface",
@@ -268,10 +303,29 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
       latIdx,
       lonIdx,
       numEnsemble,
-      STEPS_72H,
+      startStep,
+      numSteps,
     ),
-    fetchForecastVariable(store, "wind_u_10m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
-    fetchForecastVariable(store, "wind_v_10m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
+    fetchForecastVariable(
+      store,
+      "wind_u_10m",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      startStep,
+      numSteps,
+    ),
+    fetchForecastVariable(
+      store,
+      "wind_v_10m",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      startStep,
+      numSteps,
+    ),
     fetchForecastVariable(
       store,
       "total_cloud_cover_atmosphere",
@@ -279,7 +333,8 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
       latIdx,
       lonIdx,
       numEnsemble,
-      STEPS_72H,
+      startStep,
+      numSteps,
     ),
   ]);
 

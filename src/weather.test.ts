@@ -6,6 +6,7 @@ import {
   cloudCoverToFraction,
   latToIndex,
   lonToIndex,
+  computeLeadTimeWindow,
 } from "./weather.js";
 
 describe("percentile", () => {
@@ -135,5 +136,37 @@ describe("lonToIndex", () => {
   it("maps -122.4 (San Francisco) to correct index", () => {
     // (-122.4 + 180) / 0.25 = 57.6 / 0.25 = 230.4 -> rounds to 230
     expect(lonToIndex(-122.4)).toBe(230);
+  });
+});
+
+describe("computeLeadTimeWindow", () => {
+  it("starts at step 0 when init time is very recent", () => {
+    const initTime = new Date(Date.now() - 30 * 60 * 1000); // 30 min ago
+    const { startStep, numSteps } = computeLeadTimeWindow(initTime);
+    // elapsed < 3h so elapsedSteps=0, startStep = max(0, 0 - 1) = 0
+    expect(startStep).toBe(0);
+    expect(numSteps).toBe(25); // FUTURE_STEPS + CONTEXT_STEPS = 24 + 1
+  });
+
+  it("skips past steps when init time is hours ago", () => {
+    const initTime = new Date(Date.now() - 12 * 3_600_000); // 12 hours ago
+    const { startStep, numSteps } = computeLeadTimeWindow(initTime);
+    // elapsedSteps = floor(12/3) = 4, startStep = 4 - 1 = 3
+    expect(startStep).toBe(3);
+    expect(numSteps).toBe(25);
+  });
+
+  it("skips most past steps when init time is 18 hours ago", () => {
+    const initTime = new Date(Date.now() - 18 * 3_600_000); // 18 hours ago
+    const { startStep, numSteps } = computeLeadTimeWindow(initTime);
+    // elapsedSteps = floor(18/3) = 6, startStep = 6 - 1 = 5
+    expect(startStep).toBe(5);
+    expect(numSteps).toBe(25);
+  });
+
+  it("never returns a negative startStep", () => {
+    const initTime = new Date(Date.now() + 3_600_000); // 1 hour in the future
+    const { startStep } = computeLeadTimeWindow(initTime);
+    expect(startStep).toBe(0);
   });
 });
