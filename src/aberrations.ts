@@ -52,10 +52,18 @@ export function detectAberrations(
   // Check for extreme temperature swings within the forecast
   const tempRange = maxForecastTemp - minForecastTemp;
   if (tempRange > 15) {
+    const minIndex = forecast.temperature.findIndex(
+      (p) => p.p10 === minForecastTemp,
+    );
+    const maxIndex = forecast.temperature.findIndex(
+      (p) => p.p90 === maxForecastTemp,
+    );
+    const firstTemp = minIndex <= maxIndex ? minForecastTemp : maxForecastTemp;
+    const secondTemp = minIndex <= maxIndex ? maxForecastTemp : minForecastTemp;
     aberrations.push({
       type: "danger",
       icon: "\u{1F321}\u{FE0F}",
-      message: `Large temperature swing expected: ${formatTemp(minForecastTemp, units)} to ${formatTemp(maxForecastTemp, units)}`,
+      message: `Large temperature swing expected: ${formatTemp(firstTemp, units)} to ${formatTemp(secondTemp, units)}`,
     });
   }
 
