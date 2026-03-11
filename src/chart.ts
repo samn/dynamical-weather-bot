@@ -330,17 +330,22 @@ function attachListeners(canvas: HTMLCanvasElement): void {
     isTouch = e.pointerType === "touch";
     if (isTouch) {
       e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
       drawTooltip(canvas, getX(e));
     }
   });
 
   canvas.addEventListener("pointermove", (e) => {
-    if (isTouch && !e.pressure) return;
+    if (isTouch) {
+      if (!e.pressure) return;
+      e.preventDefault();
+    }
     drawTooltip(canvas, getX(e));
   });
 
-  canvas.addEventListener("pointerup", () => {
+  canvas.addEventListener("pointerup", (e) => {
     if (isTouch) {
+      canvas.releasePointerCapture(e.pointerId);
       clearTooltip(canvas);
       isTouch = false;
     }
@@ -350,12 +355,15 @@ function attachListeners(canvas: HTMLCanvasElement): void {
     if (!isTouch) clearTooltip(canvas);
   });
 
-  canvas.addEventListener("pointercancel", () => {
+  canvas.addEventListener("pointercancel", (e) => {
+    canvas.releasePointerCapture(e.pointerId);
     clearTooltip(canvas);
     isTouch = false;
   });
 
   canvas.style.touchAction = "pan-y";
+  canvas.style.userSelect = "none";
+  (canvas.style as unknown as Record<string, string>)["-webkit-user-select"] = "none";
   canvas.style.cursor = "crosshair";
 }
 
