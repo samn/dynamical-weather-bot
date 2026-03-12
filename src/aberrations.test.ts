@@ -106,7 +106,7 @@ describe("detectAberrations", () => {
     expect(result.some((a) => a.message.includes("Clearing"))).toBe(true);
   });
 
-  it("detects large temperature swings", () => {
+  it("detects large temperature swings in chronological order (cold first)", () => {
     const forecast = makeForecast({
       temperature: Array.from({ length: 24 }, (_, i) =>
         makePoint({
@@ -120,7 +120,30 @@ describe("detectAberrations", () => {
       ),
     });
     const result = detectAberrations(forecast, makeRecent());
-    expect(result.some((a) => a.message.includes("swing"))).toBe(true);
+    const swing = result.find((a) => a.message.includes("swing"));
+    expect(swing).toBeDefined();
+    // Min (5°C) occurs first chronologically, so message should show cold→warm
+    expect(swing!.message).toMatch(/5\.0°C to 30\.0°C/);
+  });
+
+  it("detects large temperature swings in chronological order (warm first)", () => {
+    const forecast = makeForecast({
+      temperature: Array.from({ length: 24 }, (_, i) =>
+        makePoint({
+          median: 20,
+          p10: i < 12 ? 25 : 5,
+          p90: i < 12 ? 30 : 10,
+          min: 5,
+          max: 30,
+          hoursFromNow: i * 3,
+        }),
+      ),
+    });
+    const result = detectAberrations(forecast, makeRecent());
+    const swing = result.find((a) => a.message.includes("swing"));
+    expect(swing).toBeDefined();
+    // Max (30°C) occurs first chronologically, so message should show warm→cold
+    expect(swing!.message).toMatch(/30\.0°C to 5\.0°C/);
   });
 
   it("detects persistent precipitation", () => {
