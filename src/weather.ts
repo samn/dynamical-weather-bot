@@ -1,5 +1,5 @@
 import * as zarr from "zarrita";
-import type { LatLon, ForecastData, ForecastPoint, RecentWeather } from "./types.js";
+import type { LatLon, ForecastPoint, ModelForecast, RecentWeather } from "./types.js";
 import { normalizeLongitude } from "./geo.js";
 
 const FORECAST_STORE_URL =
@@ -243,8 +243,8 @@ export async function fetchLatestInitTime(): Promise<string> {
   return initTime.toISOString();
 }
 
-/** Fetch the full 72-hour probabilistic forecast for a location */
-export async function fetchForecast(location: LatLon): Promise<ForecastData> {
+/** Fetch the full 72-hour probabilistic GEFS forecast for a location */
+export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast> {
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
 
@@ -298,6 +298,7 @@ export async function fetchForecast(location: LatLon): Promise<ForecastData> {
   const cloudFraction: number[][] = cloudData.map((row) => row.map(cloudCoverToFraction));
 
   return {
+    model: "NOAA GEFS",
     location,
     initTime: initTime.toISOString(),
     temperature: toForecastPoints(tempCelsius, leadTimeHours, initTime),
