@@ -1,6 +1,6 @@
 import type { ForecastData, RecentWeather } from "./types.js";
 
-const CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const STORAGE_KEY = "weather-cache";
 
 interface CacheEntry {
