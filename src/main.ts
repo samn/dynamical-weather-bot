@@ -228,10 +228,23 @@ async function loadForecast(location: LatLon): Promise<void> {
   locationLabel.textContent = `${location.latitude.toFixed(2)}\u00B0N, ${location.longitude.toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
 
   try {
-    const cached = getCached(location.latitude, location.longitude);
     let forecast: ForecastData;
     let recentWeather: import("./types.js").RecentWeather;
+
+    // Check cache, but validate against the latest available init_time
+    const cached = getCached(location.latitude, location.longitude);
+    let useCache = false;
     if (cached) {
+      try {
+        const latestInitTime = await fetchLatestInitTime();
+        useCache = latestInitTime <= cached.forecast.initTime;
+      } catch {
+        // Network error checking init time — use cache as fallback
+        useCache = true;
+      }
+    }
+
+    if (useCache && cached) {
       forecast = cached.forecast;
       recentWeather = cached.recentWeather;
     } else {
@@ -264,7 +277,7 @@ async function loadForecast(location: LatLon): Promise<void> {
     // Render charts
     renderCharts(forecast);
 
-    // Always check for newer init time in the background
+    // Check for newer init time in the background (handles store updates during session)
     checkForNewerForecast(location, forecast.initTime);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error occurred";

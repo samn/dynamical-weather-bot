@@ -80,7 +80,7 @@ describe("setCache / getCached", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now() + 47 * 60 * 60 * 1000);
+    vi.setSystemTime(Date.now() + 50 * 60 * 1000); // 50 minutes (within 1-hour TTL)
 
     expect(getCached(40, -74)).not.toBeNull();
 
@@ -135,22 +135,22 @@ describe("setCache / getCached", () => {
     expect(result!.forecast.initTime).toBe("2026-03-07T12:00:00.000Z");
   });
 
-  it("is still fresh at exactly the 48-hour boundary", () => {
+  it("is still fresh at exactly the 1-hour boundary", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    // At exactly 48 hours — not yet expired (uses > not >=)
-    vi.setSystemTime(Date.now() + 48 * 60 * 60 * 1000);
+    // At exactly 1 hour — not yet expired (uses > not >=)
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000);
     expect(getCached(40, -74)).not.toBeNull();
 
     vi.useRealTimers();
   });
 
-  it("expires 1ms past the 48-hour boundary", () => {
+  it("expires 1ms past the 1-hour boundary", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    vi.setSystemTime(Date.now() + 48 * 60 * 60 * 1000 + 1);
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000 + 1);
     expect(getCached(40, -74)).toBeNull();
 
     vi.useRealTimers();
@@ -160,12 +160,12 @@ describe("setCache / getCached", () => {
     setCache(40, -74, mockForecast, mockRecent);
 
     vi.useFakeTimers();
-    // Advance 24 hours — first entry still fresh
-    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    // Advance 30 minutes — first entry still fresh
+    vi.setSystemTime(Date.now() + 30 * 60 * 1000);
     setCache(50, 10, mockForecast, mockRecent);
 
-    // Advance another 25 hours — first entry now expired (49h total), second still fresh (25h)
-    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+    // Advance another 35 minutes — first entry now expired (65min total), second still fresh (35min)
+    vi.setSystemTime(Date.now() + 35 * 60 * 1000);
     setCache(60, 20, mockForecast, mockRecent);
 
     const raw = JSON.parse(storage.get("weather-cache")!);
