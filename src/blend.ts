@@ -187,9 +187,10 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
       hrrr.precipitation,
       models,
       accuracy,
+      0,
     ),
-    windSpeed: blendVariable("windSpeed", gefs.windSpeed, hrrr.windSpeed, models, accuracy),
-    cloudCover: blendVariable("cloudCover", gefs.cloudCover, hrrr.cloudCover, models, accuracy),
+    windSpeed: blendVariable("windSpeed", gefs.windSpeed, hrrr.windSpeed, models, accuracy, 0),
+    cloudCover: blendVariable("cloudCover", gefs.cloudCover, hrrr.cloudCover, models, accuracy, 0),
   };
 }
 
@@ -203,6 +204,7 @@ function blendVariable(
   hrrrPoints: ForecastPoint[],
   models: ModelId[],
   accuracy: Record<string, Record<string, Record<string, number>>> | undefined,
+  clampMin?: number,
 ): ForecastPoint[] {
   const accuracyVarKey = VARIABLE_KEYS[varKey] ?? "temperature_2m";
 
@@ -236,14 +238,16 @@ function blendVariable(
     // Shift GEFS uncertainty bands to center on blended median
     const offset = blendedMedian - gefsPt.median;
 
+    const clamp = (v: number) => (clampMin !== undefined ? Math.max(clampMin, v) : v);
+
     return {
       time: gefsPt.time,
       hoursFromNow: gefsPt.hoursFromNow,
-      median: blendedMedian,
-      p10: gefsPt.p10 + offset,
-      p90: gefsPt.p90 + offset,
-      min: gefsPt.min + offset,
-      max: gefsPt.max + offset,
+      median: clamp(blendedMedian),
+      p10: clamp(gefsPt.p10 + offset),
+      p90: clamp(gefsPt.p90 + offset),
+      min: clamp(gefsPt.min + offset),
+      max: clamp(gefsPt.max + offset),
     };
   });
 }

@@ -251,6 +251,25 @@ describe("blendForecasts", () => {
     expect(result.temperature[1]!.median).toBe(20);
   });
 
+  it("clamps precipitation to zero (never negative)", () => {
+    // HRRR predicts 0, GEFS predicts 2 with spread down to min=0.5
+    // Blending shifts median down, which could push min below zero
+    const gefs = makeGefs([{ median: 2, p10: 1, p90: 3, min: 0.5, max: 4, hoursFromNow: 0 }]);
+    const hrrr = makeHrrr([{ median: 0, p10: 0, p90: 0, min: 0, max: 0, hoursFromNow: 0 }]);
+
+    const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
+
+    // With equal weights (no accuracy data), blended median = 1, offset = -1
+    // min would be 0.5 + (-1) = -0.5, but should be clamped to 0
+    expect(result.precipitation[0]!.min).toBe(0);
+    expect(result.precipitation[0]!.p10).toBe(0);
+    // Wind and cloud cover should also be clamped
+    expect(result.windSpeed[0]!.min).toBe(0);
+    expect(result.cloudCover[0]!.min).toBe(0);
+    // Temperature can be negative — no clamping
+    expect(result.temperature[0]!.min).toBeCloseTo(-0.5, 5);
+  });
+
   it("preserves location and initTime from GEFS", () => {
     const gefs = makeGefs();
     const hrrr = makeHrrr();
