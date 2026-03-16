@@ -49,6 +49,39 @@ export interface RecentWeather {
   avgCloudCover: number;
 }
 
+/** Supported forecast model identifiers */
+export type ModelId = "NOAA GEFS" | "NOAA HRRR";
+
+/** Forecast output from a single model */
+export interface ModelForecast {
+  model: ModelId;
+  location: LatLon;
+  initTime: string;
+  temperature: ForecastPoint[];
+  precipitation: ForecastPoint[];
+  windSpeed: ForecastPoint[];
+  cloudCover: ForecastPoint[];
+}
+
+/** Accuracy grid built from verification statistics */
+export interface AccuracyGrid {
+  gridResolution: number;
+  bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };
+  cells: Record<string, AccuracyCell>;
+}
+
+/** A single cell in the accuracy grid */
+export interface AccuracyCell {
+  stationCount: number;
+  /** model → variable → lead_hours → error metric */
+  metrics: Record<string, Record<string, Record<string, number>>>;
+  nearbyStations?: Array<{
+    id: string;
+    distance: number;
+    metrics: Record<string, Record<string, Record<string, number>>>;
+  }>;
+}
+
 /** A weather aberration to highlight to the user */
 export interface Aberration {
   type: "warm" | "cool" | "rain" | "danger";

@@ -1,6 +1,8 @@
-import type { LatLon, ForecastData, Aberration } from "./types.js";
+import type { LatLon, ForecastData, Aberration, AccuracyGrid } from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
-import { fetchForecast, fetchRecentWeather, fetchLatestInitTime } from "./weather.js";
+import { fetchGefsForecast, fetchRecentWeather, fetchLatestInitTime } from "./weather.js";
+import { fetchHrrrForecast } from "./hrrr.js";
+import { blendForecasts } from "./blend.js";
 import { detectAberrations } from "./aberrations.js";
 import { renderChart, type IntensityBand } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
@@ -28,6 +30,41 @@ const initTimeLabel = document.getElementById("init-time-label") as HTMLSpanElem
 const updatingIndicator = document.getElementById("updating-indicator") as HTMLSpanElement;
 const metricBtn = document.getElementById("metric-btn") as HTMLButtonElement;
 const imperialBtn = document.getElementById("imperial-btn") as HTMLButtonElement;
+
+/** Load bundled accuracy grid data, or return empty grid if not available */
+function loadAccuracyGrid(): AccuracyGrid {
+  try {
+    // Bundled by Vite at build time via JSON import
+    // Falls back to empty grid if not yet generated
+    return _accuracyGrid;
+  } catch {
+    return {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {},
+    };
+  }
+}
+
+let _accuracyGrid: AccuracyGrid = {
+  gridResolution: 0.5,
+  bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+  cells: {},
+};
+
+// Attempt to load accuracy grid asynchronously
+try {
+  import("./generated/accuracy-grid.json").then(
+    (mod) => {
+      _accuracyGrid = mod.default as AccuracyGrid;
+    },
+    () => {
+      // Grid not generated yet — will use empty grid (GEFS-only weights)
+    },
+  );
+} catch {
+  // Static import analysis may fail — that's fine
+}
 
 /** Store last data for re-rendering on resize and unit toggle */
 let lastForecast: ForecastData | null = null;
@@ -161,10 +198,14 @@ async function checkForNewerForecast(location: LatLon, cachedInitTime: string): 
     // Newer forecast available — show updating indicator and refetch
     updatingIndicator.classList.remove("hidden");
 
-    const [forecast, recentWeather] = await Promise.all([
-      fetchForecast(location),
+    const [gefsForecast, hrrrForecast, recentWeather] = await Promise.all([
+      fetchGefsForecast(location),
+      fetchHrrrForecast(location),
       fetchRecentWeather(location),
     ]);
+    const modelForecasts = [gefsForecast];
+    if (hrrrForecast) modelForecasts.push(hrrrForecast);
+    const forecast = blendForecasts(modelForecasts, loadAccuracyGrid());
     setCache(location.latitude, location.longitude, forecast, recentWeather);
 
     lastForecast = forecast;
@@ -194,10 +235,15 @@ async function loadForecast(location: LatLon): Promise<void> {
       forecast = cached.forecast;
       recentWeather = cached.recentWeather;
     } else {
-      [forecast, recentWeather] = await Promise.all([
-        fetchForecast(location),
+      const [gefsForecast, hrrrForecast, recentData] = await Promise.all([
+        fetchGefsForecast(location),
+        fetchHrrrForecast(location),
         fetchRecentWeather(location),
       ]);
+      const modelForecasts = [gefsForecast];
+      if (hrrrForecast) modelForecasts.push(hrrrForecast);
+      forecast = blendForecasts(modelForecasts, loadAccuracyGrid());
+      recentWeather = recentData;
       setCache(location.latitude, location.longitude, forecast, recentWeather);
     }
 
