@@ -236,7 +236,7 @@ function toForecastPoints(
   return points;
 }
 
-/** Fetch just the latest forecast init time (lightweight metadata check) */
+/** Fetch just the latest GEFS forecast init time (lightweight metadata check) */
 export async function fetchLatestInitTime(): Promise<string> {
   const store = new zarr.FetchStore(FORECAST_STORE_URL);
   const { initTime } = await getLatestInitTimeIndex(store);

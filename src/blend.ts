@@ -177,9 +177,12 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
   const accuracy = lookupAccuracy(gefs.location, grid);
   const models: ModelId[] = ["NOAA GEFS", "NOAA HRRR"];
 
+  // Use the most recent init_time from any model (HRRR updates more frequently than GEFS)
+  const latestInitTime = hrrr.initTime > gefs.initTime ? hrrr.initTime : gefs.initTime;
+
   return {
     location: gefs.location,
-    initTime: gefs.initTime,
+    initTime: latestInitTime,
     temperature: blendVariable("temperature", gefs.temperature, hrrr.temperature, models, accuracy),
     precipitation: blendVariable(
       "precipitation",

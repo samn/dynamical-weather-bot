@@ -1,7 +1,7 @@
 import type { LatLon, ForecastData, Aberration, AccuracyGrid } from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
 import { fetchGefsForecast, fetchRecentWeather, fetchLatestInitTime } from "./weather.js";
-import { fetchHrrrForecast } from "./hrrr.js";
+import { fetchHrrrForecast, fetchLatestHrrrInitTime } from "./hrrr.js";
 import { blendForecasts } from "./blend.js";
 import { detectAberrations } from "./aberrations.js";
 import { renderChart, type IntensityBand } from "./chart.js";
@@ -190,9 +190,22 @@ function renderCharts(forecast: ForecastData): void {
   });
 }
 
+/**
+ * Fetch the most recent init_time across both GEFS and HRRR stores.
+ * GEFS 35-day product updates daily (00Z), HRRR updates every 6 hours,
+ * so HRRR will typically have the most recent init_time.
+ */
+async function fetchLatestAnyInitTime(): Promise<string> {
+  const [gefsInit, hrrrInit] = await Promise.all([
+    fetchLatestInitTime(),
+    fetchLatestHrrrInitTime().catch(() => ""),
+  ]);
+  return hrrrInit > gefsInit ? hrrrInit : gefsInit;
+}
+
 async function checkForNewerForecast(location: LatLon, cachedInitTime: string): Promise<void> {
   try {
-    const latestInitTime = await fetchLatestInitTime();
+    const latestInitTime = await fetchLatestAnyInitTime();
     if (latestInitTime <= cachedInitTime) return;
 
     // Newer forecast available — show updating indicator and refetch
@@ -236,7 +249,7 @@ async function loadForecast(location: LatLon): Promise<void> {
     let useCache = false;
     if (cached) {
       try {
-        const latestInitTime = await fetchLatestInitTime();
+        const latestInitTime = await fetchLatestAnyInitTime();
         useCache = latestInitTime <= cached.forecast.initTime;
       } catch {
         // Network error checking init time — use cache as fallback

@@ -9,6 +9,17 @@ const HRRR_STORE_URL =
 /** Maximum number of hourly steps in HRRR 48-hour forecast */
 const MAX_STEPS = 48;
 
+/** Fetch just the latest HRRR forecast init time (lightweight metadata check) */
+export async function fetchLatestHrrrInitTime(): Promise<string> {
+  const store = new zarr.FetchStore(HRRR_STORE_URL);
+  const root = zarr.root(store);
+  const arr = await zarr.open(root.resolve("init_time"), { kind: "array" });
+  const result = await zarr.get(arr);
+  const data = coordToNumbers(result.data);
+  const lastSec = data[data.length - 1] ?? 0;
+  return new Date(lastSec * 1000).toISOString();
+}
+
 /**
  * HRRR uses Lambert Conformal Conic projection.
  * These are the well-known HRRR projection parameters.

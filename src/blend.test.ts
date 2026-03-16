@@ -270,12 +270,25 @@ describe("blendForecasts", () => {
     expect(result.temperature[0]!.min).toBeCloseTo(-0.5, 5);
   });
 
-  it("preserves location and initTime from GEFS", () => {
+  it("preserves location from GEFS and uses most recent initTime", () => {
     const gefs = makeGefs();
+    gefs.initTime = "2026-03-15T00:00:00.000Z";
     const hrrr = makeHrrr();
+    hrrr.initTime = "2026-03-16T12:00:00.000Z";
     const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
 
     expect(result.location).toEqual(gefs.location);
+    // HRRR has a more recent init_time, so it should be used
+    expect(result.initTime).toBe(hrrr.initTime);
+  });
+
+  it("uses GEFS initTime when HRRR initTime is older", () => {
+    const gefs = makeGefs();
+    gefs.initTime = "2026-03-16T00:00:00.000Z";
+    const hrrr = makeHrrr();
+    hrrr.initTime = "2026-03-15T18:00:00.000Z";
+    const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
+
     expect(result.initTime).toBe(gefs.initTime);
   });
 });
