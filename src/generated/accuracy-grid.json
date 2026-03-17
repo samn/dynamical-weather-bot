@@ -1,5 +1,1 @@
-{
-  "gridResolution": 0.5,
-  "bounds": { "minLat": 24, "maxLat": 50, "minLon": -130, "maxLon": -65 },
-  "cells": {}
-}
+{"gridResolution":1.0,"bounds":{"minLat":24,"maxLat":50,"minLon":-130,"maxLon":-65},"cells":{}}

@@ -4,7 +4,7 @@
 export const LEAD_BINS = [0, 24, 48];
 
 /** Grid resolution in degrees */
-export const GRID_RES = 0.5;
+export const GRID_RES = 1.0;
 
 export interface Station {
   id: string;
