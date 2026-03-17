@@ -207,9 +207,10 @@ test.describe("ZIP code input", () => {
     await page.fill("#zip-input", "10001");
     await page.click('#zip-form button[type="submit"]');
 
-    // Loading should be visible briefly (Zarr requests are blocked so it will
-    // eventually error, but we can check the loading state appeared)
-    await expect(page.locator("#loading")).not.toHaveClass(/hidden/);
+    // Skeleton charts should appear (forecast container visible with loading canvases).
+    // Zarr requests are blocked so it will eventually error, but we can check the
+    // progressive loading state appeared.
+    await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
   });
 
   test("submitting an invalid ZIP shows an error", async ({ page }) => {
