@@ -70,16 +70,21 @@ export interface AccuracyGrid {
   cells: Record<string, AccuracyCell>;
 }
 
+/** A weather station with its verification metrics */
+export interface NearbyStation {
+  id: string;
+  latitude: number;
+  longitude: number;
+  /** model → variable → lead_hours → error metric */
+  metrics: Record<string, Record<string, Record<string, number>>>;
+}
+
 /** A single cell in the accuracy grid */
 export interface AccuracyCell {
   stationCount: number;
   /** model → variable → lead_hours → error metric */
   metrics: Record<string, Record<string, Record<string, number>>>;
-  nearbyStations?: Array<{
-    id: string;
-    distance: number;
-    metrics: Record<string, Record<string, Record<string, number>>>;
-  }>;
+  nearbyStations?: NearbyStation[];
 }
 
 /** The four forecast variable keys */

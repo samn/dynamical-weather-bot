@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeWeights, blendForecasts, lookupAccuracy } from "./blend.js";
-import type { ModelForecast, AccuracyGrid, ForecastPoint } from "./types.js";
+import type { ModelForecast, AccuracyGrid, ForecastPoint, NearbyStation } from "./types.js";
 
 function makeForecastPoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
@@ -67,76 +67,217 @@ function gridWithAccuracy(gefsError: number, hrrrError: number): AccuracyGrid {
   };
 }
 
+/** Test user location: (40.2, -89.8), falls in cell "40.0,-90.0" */
+const TEST_LOC = { latitude: 40.2, longitude: -89.8 };
+
+/** Station ~5km from TEST_LOC */
+function makeStation(
+  id: string,
+  latitude: number,
+  longitude: number,
+  metrics: NearbyStation["metrics"],
+): NearbyStation {
+  return { id, latitude, longitude, metrics };
+}
+
 describe("lookupAccuracy", () => {
   it("returns undefined for locations outside the grid", () => {
     const result = lookupAccuracy({ latitude: 60, longitude: -90 }, EMPTY_GRID);
     expect(result).toBeUndefined();
   });
 
-  it("returns metrics for locations inside the grid", () => {
+  it("returns cell metrics when no nearby stations", () => {
     const grid = gridWithAccuracy(2.0, 1.5);
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
+    const result = lookupAccuracy(TEST_LOC, grid);
     expect(result).toBeDefined();
     expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(2.0);
     expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["0"]).toBe(1.5);
   });
 
-  it("blends with nearby station metrics when distance < 25km", () => {
+  it("uses IDW weighting across nearby stations", () => {
+    // Station A: ~5km away (lat 40.245), error 2.0
+    // Station B: ~10km away (lat 40.29), error 6.0
+    // IDW weights: A = 1/25 = 0.04, B = 1/100 = 0.01
+    // Weighted avg = (0.04*2 + 0.01*6) / (0.04+0.01) = 0.14/0.05 = 2.8
     const grid: AccuracyGrid = {
       gridResolution: 0.5,
       bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
       cells: {
         "40.0,-90.0": {
-          stationCount: 6,
+          stationCount: 5,
           metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+            "NOAA GEFS": { temperature_2m: { "0": 99 } }, // should be ignored when stations are in range
           },
           nearbyStations: [
-            {
-              id: "KORD",
-              distance: 10,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
-                "NOAA HRRR": { temperature_2m: { "0": 1.0 } },
-              },
-            },
+            makeStation("A", 40.245, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+            }),
+            makeStation("B", 40.29, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 6.0 } },
+            }),
           ],
         },
       },
     };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
+    const result = lookupAccuracy(TEST_LOC, grid);
     expect(result).toBeDefined();
-    // Blended: cell(2.0) + station(4.0) / 2 = 3.0
-    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(3.0);
-    // Station-only: 1.0 (cell has no HRRR data, station does)
-    expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["0"]).toBe(1.0);
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBeCloseTo(2.8, 0);
   });
 
-  it("does not blend with distant nearby stations (>= 25km)", () => {
+  it("nearest station dominates with IDW weighting", () => {
+    // Station A: ~2km away, error 4.0
+    // Station B: ~20km away, error 1.0
+    // IDW: A = 1/4 = 0.25, B = 1/400 = 0.0025
+    // A has ~99% of the weight
     const grid: AccuracyGrid = {
       gridResolution: 0.5,
       bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
       cells: {
         "40.0,-90.0": {
-          stationCount: 6,
-          metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
-          },
+          stationCount: 5,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 99 } } },
           nearbyStations: [
-            {
-              id: "KORD",
-              distance: 30,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
-              },
-            },
+            makeStation("CLOSE", 40.218, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
+            }),
+            makeStation("FAR", 40.38, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 1.0 } },
+            }),
           ],
         },
       },
     };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
-    // Should return cell metrics directly, not blended
+    const result = lookupAccuracy(TEST_LOC, grid);
+    // Close station should dominate — result should be very near 4.0
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBeCloseTo(4.0, 1);
+  });
+
+  it("falls back to cell metrics when all stations are beyond 50km", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 3,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+          },
+          nearbyStations: [
+            makeStation("DISTANT", 40.74, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 9.0 } },
+            }),
+          ],
+        },
+      },
+    };
+    const result = lookupAccuracy(TEST_LOC, grid);
+    // Station is ~60km away, beyond 50km radius → falls back to cell metrics
     expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(2.0);
+  });
+
+  it("applies minimum distance cap for co-located stations", () => {
+    // Station at exact user location — distance ~0, capped to 1km
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 3,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 99 } } },
+          nearbyStations: [
+            makeStation("HERE", 40.2, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 3.0 } },
+            }),
+          ],
+        },
+      },
+    };
+    const result = lookupAccuracy(TEST_LOC, grid);
+    // Should return the station's metrics (no division by zero)
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(3.0);
+  });
+
+  it("handles stations with data for a model that other stations lack", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 3,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 99 } } },
+          nearbyStations: [
+            makeStation("A", 40.245, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
+              "NOAA HRRR": { temperature_2m: { "0": 1.0, "24": 1.5 } },
+            }),
+            makeStation("B", 40.29, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+              // No HRRR data
+            }),
+          ],
+        },
+      },
+    };
+    const result = lookupAccuracy(TEST_LOC, grid);
+    expect(result).toBeDefined();
+    // GEFS blended across both stations
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBeDefined();
+    // HRRR only from station A (the only one with HRRR data)
+    expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["0"]).toBe(1.0);
+    expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["24"]).toBe(1.5);
+  });
+
+  it("handles stations with different variables for same model", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 3,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 99 } } },
+          nearbyStations: [
+            makeStation("A", 40.245, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 4.0 }, precipitation_surface: { "0": 1.0 } },
+            }),
+            makeStation("B", 40.29, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+              // No precipitation data
+            }),
+          ],
+        },
+      },
+    };
+    const result = lookupAccuracy(TEST_LOC, grid);
+    // Temperature blended from both stations
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBeDefined();
+    // Precipitation only from station A
+    expect(result?.["NOAA GEFS"]?.["precipitation_surface"]?.["0"]).toBe(1.0);
+  });
+
+  it("handles stations with different lead times", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 3,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 99 } } },
+          nearbyStations: [
+            makeStation("A", 40.245, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
+            }),
+            makeStation("B", 40.29, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 2.0, "48": 5.0 } },
+            }),
+          ],
+        },
+      },
+    };
+    const result = lookupAccuracy(TEST_LOC, grid);
+    // Lead "0" blended from both
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBeDefined();
+    // Lead "48" only from station B
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["48"]).toBe(5.0);
   });
 });
 
@@ -321,156 +462,5 @@ describe("blendForecasts", () => {
 
     // Equal weights (no accuracy data) → blended median = 15
     expect(result.temperature[0]!.median).toBeCloseTo(15, 5);
-  });
-});
-
-describe("lookupAccuracy edge cases", () => {
-  it("handles station with data for a model that the cell lacks", () => {
-    const grid: AccuracyGrid = {
-      gridResolution: 0.5,
-      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
-      cells: {
-        "40.0,-90.0": {
-          stationCount: 3,
-          metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
-          },
-          nearbyStations: [
-            {
-              id: "KORD",
-              distance: 5,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
-                "NOAA HRRR": { temperature_2m: { "0": 1.0, "24": 1.5 } },
-              },
-            },
-          ],
-        },
-      },
-    };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
-    expect(result).toBeDefined();
-    // GEFS blended: (2+4)/2 = 3
-    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(3.0);
-    // HRRR: station-only (cell has no HRRR data) → uses station value directly
-    expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["0"]).toBe(1.0);
-    expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["24"]).toBe(1.5);
-  });
-
-  it("handles cell with data for a lead time the station lacks", () => {
-    const grid: AccuracyGrid = {
-      gridResolution: 0.5,
-      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
-      cells: {
-        "40.0,-90.0": {
-          stationCount: 3,
-          metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0, "48": 3.5 } },
-          },
-          nearbyStations: [
-            {
-              id: "KORD",
-              distance: 10,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
-              },
-            },
-          ],
-        },
-      },
-    };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
-    // Lead "0" blended: (2+4)/2 = 3
-    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(3.0);
-    // Lead "48" cell-only (station has no "48") → uses cell value directly
-    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["48"]).toBe(3.5);
-  });
-
-  it("handles cell with model data the station lacks", () => {
-    const grid: AccuracyGrid = {
-      gridResolution: 0.5,
-      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
-      cells: {
-        "40.0,-90.0": {
-          stationCount: 3,
-          metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
-            "NOAA HRRR": { temperature_2m: { "0": 3.0 } },
-          },
-          nearbyStations: [
-            {
-              id: "KORD",
-              distance: 10,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
-                // Station has no HRRR data at all
-              },
-            },
-          ],
-        },
-      },
-    };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
-    // GEFS blended: (2+4)/2 = 3
-    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(3.0);
-    // HRRR: cell-only (station has no HRRR) → uses cell value directly
-    expect(result?.["NOAA HRRR"]?.["temperature_2m"]?.["0"]).toBe(3.0);
-  });
-
-  it("handles cell with variable data the station lacks for same model", () => {
-    const grid: AccuracyGrid = {
-      gridResolution: 0.5,
-      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
-      cells: {
-        "40.0,-90.0": {
-          stationCount: 3,
-          metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0 }, precipitation_surface: { "0": 5.0 } },
-          },
-          nearbyStations: [
-            {
-              id: "KORD",
-              distance: 10,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 } },
-                // Station GEFS has no precipitation_surface
-              },
-            },
-          ],
-        },
-      },
-    };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
-    // temperature blended: (2+4)/2 = 3
-    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(3.0);
-    // precipitation: cell-only → 5.0
-    expect(result?.["NOAA GEFS"]?.["precipitation_surface"]?.["0"]).toBe(5.0);
-  });
-
-  it("handles station with variable the cell lacks", () => {
-    const grid: AccuracyGrid = {
-      gridResolution: 0.5,
-      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
-      cells: {
-        "40.0,-90.0": {
-          stationCount: 3,
-          metrics: {
-            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
-          },
-          nearbyStations: [
-            {
-              id: "KORD",
-              distance: 10,
-              metrics: {
-                "NOAA GEFS": { temperature_2m: { "0": 4.0 }, precipitation_surface: { "0": 1.0 } },
-              },
-            },
-          ],
-        },
-      },
-    };
-    const result = lookupAccuracy({ latitude: 40.2, longitude: -89.8 }, grid);
-    // station-only variable
-    expect(result?.["NOAA GEFS"]?.["precipitation_surface"]?.["0"]).toBe(1.0);
   });
 });

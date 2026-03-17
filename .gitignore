@@ -143,3 +143,6 @@ test-results/
 playwright-report/
 
 .claude/settings.local.json
+
+# Generated accuracy grid (built during npm run build)
+src/generated/
