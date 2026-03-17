@@ -46,6 +46,18 @@ function makeRecent(overrides: Partial<RecentWeather> = {}): RecentWeather {
 }
 
 describe("detectAberrations", () => {
+  it("handles empty forecast arrays without crashing", () => {
+    const forecast = makeForecast({
+      temperature: [],
+      precipitation: [],
+      windSpeed: [],
+      cloudCover: [],
+    });
+    // With empty arrays, average returns 0 which may trigger aberrations vs recent
+    // but the function should not throw
+    expect(() => detectAberrations(forecast, makeRecent())).not.toThrow();
+  });
+
   it("returns empty array when forecast matches recent weather", () => {
     const result = detectAberrations(makeForecast(), makeRecent());
     expect(result).toEqual([]);
