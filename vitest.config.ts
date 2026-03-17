@@ -19,6 +19,7 @@ export default defineConfig({
         "src/weather.ts",
         "src/geo.ts",
         "src/hrrr.ts",
+        "src/ecmwf.ts",
       ],
       thresholds: {
         statements: 90,

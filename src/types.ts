@@ -50,11 +50,13 @@ export interface RecentWeather {
 }
 
 /** Supported forecast model identifiers */
-export type ModelId = "NOAA GEFS" | "NOAA HRRR";
+export type ModelId = "NOAA GEFS" | "NOAA HRRR" | "ECMWF IFS ENS";
 
 /** Forecast output from a single model */
 export interface ModelForecast {
   model: ModelId;
+  /** Whether this model provides ensemble-based uncertainty bands */
+  isEnsemble: boolean;
   location: LatLon;
   initTime: string;
   temperature: ForecastPoint[];

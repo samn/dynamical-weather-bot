@@ -206,6 +206,7 @@ export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast
 
   return {
     model: "NOAA HRRR",
+    isEnsemble: false,
     location,
     initTime: meta.initTime.toISOString(),
     temperature,

@@ -169,53 +169,50 @@ const VARIABLE_KEYS: Record<string, string> = {
   cloudCover: "temperature_2m", // use temperature accuracy as proxy for cloud
 };
 
+/** Input for blending a single variable from one model */
+export interface ModelVariableInput {
+  model: ModelId;
+  points: ForecastPoint[];
+  isEnsemble: boolean;
+}
+
 /**
  * Blend multiple model forecasts using accuracy-weighted averaging.
  *
  * Strategy:
- * - Blended median = weighted average of model medians
- * - Uncertainty bands come from GEFS (the only ensemble model), shifted to center on blended median
- * - Beyond HRRR's 48hr range, GEFS data passes through unchanged
+ * - Blended median = weighted average of all model medians
+ * - Uncertainty bands = weighted average of ensemble models' bands, shifted to center on blended median
+ * - Beyond shorter models' ranges, remaining models pass through
  */
 export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): ForecastData {
-  // Must have at least GEFS
-  const gefs = forecasts.find((f) => f.model === "NOAA GEFS");
-  if (!gefs) throw new Error("GEFS forecast is required for blending");
+  const ensembleModels = forecasts.filter((f) => f.isEnsemble);
+  if (ensembleModels.length === 0) throw new Error("At least one ensemble model is required");
 
-  const hrrr = forecasts.find((f) => f.model === "NOAA HRRR");
+  const base = ensembleModels[0]!;
+  const accuracy = lookupAccuracy(base.location, grid);
+  const latestInitTime = forecasts.reduce(
+    (latest, f) => (f.initTime > latest ? f.initTime : latest),
+    forecasts[0]!.initTime,
+  );
 
-  // Single model — no blending needed
-  if (!hrrr) {
-    return {
-      location: gefs.location,
-      initTime: gefs.initTime,
-      temperature: gefs.temperature,
-      precipitation: gefs.precipitation,
-      windSpeed: gefs.windSpeed,
-      cloudCover: gefs.cloudCover,
-    };
+  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+  const result: Partial<Record<ForecastVariable, ForecastPoint[]>> = {};
+  for (const varKey of variables) {
+    const inputs: ModelVariableInput[] = forecasts.map((f) => ({
+      model: f.model,
+      points: f[varKey],
+      isEnsemble: f.isEnsemble,
+    }));
+    result[varKey] = blendVariable(varKey, inputs, accuracy, CLAMP_MIN[varKey]);
   }
 
-  const accuracy = lookupAccuracy(gefs.location, grid);
-  const models: ModelId[] = ["NOAA GEFS", "NOAA HRRR"];
-
-  // Use the most recent init_time from any model (HRRR updates more frequently than GEFS)
-  const latestInitTime = hrrr.initTime > gefs.initTime ? hrrr.initTime : gefs.initTime;
-
   return {
-    location: gefs.location,
+    location: base.location,
     initTime: latestInitTime,
-    temperature: blendVariable("temperature", gefs.temperature, hrrr.temperature, models, accuracy),
-    precipitation: blendVariable(
-      "precipitation",
-      gefs.precipitation,
-      hrrr.precipitation,
-      models,
-      accuracy,
-      0,
-    ),
-    windSpeed: blendVariable("windSpeed", gefs.windSpeed, hrrr.windSpeed, models, accuracy, 0),
-    cloudCover: blendVariable("cloudCover", gefs.cloudCover, hrrr.cloudCover, models, accuracy, 0),
+    temperature: result.temperature!,
+    precipitation: result.precipitation!,
+    windSpeed: result.windSpeed!,
+    cloudCover: result.cloudCover!,
   };
 }
 
@@ -227,76 +224,117 @@ const CLAMP_MIN: Partial<Record<ForecastVariable, number>> = {
 };
 
 /**
- * Blend a single forecast variable from GEFS and (optionally) HRRR.
+ * Blend a single forecast variable from multiple models.
  * Use this for progressive per-variable rendering.
  */
 export function blendSingleVariable(
   varKey: ForecastVariable,
-  gefsPoints: ForecastPoint[],
-  hrrrPoints: ForecastPoint[] | null,
+  inputs: ModelVariableInput[],
   location: LatLon,
   grid: AccuracyGrid,
 ): ForecastPoint[] {
-  if (!hrrrPoints) return gefsPoints;
+  if (inputs.length === 0) return [];
+  if (inputs.length === 1) return inputs[0]!.points;
   const accuracy = lookupAccuracy(location, grid);
-  const models: ModelId[] = ["NOAA GEFS", "NOAA HRRR"];
-  return blendVariable(varKey, gefsPoints, hrrrPoints, models, accuracy, CLAMP_MIN[varKey]);
+  return blendVariable(varKey, inputs, accuracy, CLAMP_MIN[varKey]);
 }
 
 /**
- * Blend a single variable across models.
- * HRRR data is sampled at GEFS's 3-hourly timesteps.
+ * Blend a single variable across N models.
+ *
+ * For each timestep:
+ * 1. Collect matching points from all models (by rounded hoursFromNow)
+ * 2. Compute accuracy weights for available models
+ * 3. Blended median = weighted average of all model medians
+ * 4. Blended bands = weighted average of ensemble models' bands,
+ *    shifted so center aligns with blended median
  */
 function blendVariable(
   varKey: string,
-  gefsPoints: ForecastPoint[],
-  hrrrPoints: ForecastPoint[],
-  models: ModelId[],
+  inputs: ModelVariableInput[],
   accuracy: Record<string, Record<string, Record<string, number>>> | undefined,
   clampMin?: number,
 ): ForecastPoint[] {
   const accuracyVarKey = VARIABLE_KEYS[varKey] ?? "temperature_2m";
 
-  // Build a lookup of HRRR points by their rounded hoursFromNow for matching
-  const hrrrByHour = new Map<number, ForecastPoint>();
-  for (const pt of hrrrPoints) {
-    hrrrByHour.set(Math.round(pt.hoursFromNow), pt);
+  // Use first ensemble model as base for timestep iteration
+  const baseInput = inputs.find((i) => i.isEnsemble) ?? inputs[0]!;
+
+  // Build lookup maps: model -> hour -> point
+  const pointsByModel = new Map<ModelId, Map<number, ForecastPoint>>();
+  for (const input of inputs) {
+    const byHour = new Map<number, ForecastPoint>();
+    for (const pt of input.points) {
+      byHour.set(Math.round(pt.hoursFromNow), pt);
+    }
+    pointsByModel.set(input.model, byHour);
   }
 
-  return gefsPoints.map((gefsPt) => {
-    // Find matching HRRR point (within 1 hour tolerance)
-    const gefsHour = Math.round(gefsPt.hoursFromNow);
-    const hrrrPt = hrrrByHour.get(gefsHour);
+  const ensembleModelIds = new Set(inputs.filter((i) => i.isEnsemble).map((i) => i.model));
+  const clamp = (v: number) => (clampMin !== undefined ? Math.max(clampMin, v) : v);
 
-    // No HRRR data at this timestep — pass through GEFS
-    if (!hrrrPt) return gefsPt;
+  return baseInput.points.map((basePt) => {
+    const hour = Math.round(basePt.hoursFromNow);
 
-    // Compute weights for this lead time
+    // Collect available models at this timestep
+    const available: Array<{ model: ModelId; point: ForecastPoint }> = [];
+    for (const input of inputs) {
+      const pt = pointsByModel.get(input.model)?.get(hour);
+      if (pt) available.push({ model: input.model, point: pt });
+    }
+
+    if (available.length <= 1) return basePt;
+
+    // Compute weights for all available models
     const weights = computeWeights(
-      models,
+      available.map((a) => a.model),
       accuracyVarKey,
-      Math.max(0, gefsPt.hoursFromNow),
+      Math.max(0, basePt.hoursFromNow),
       accuracy,
     );
-    const gefsWeight = weights.get("NOAA GEFS") ?? 1;
-    const hrrrWeight = weights.get("NOAA HRRR") ?? 0;
 
-    // Blended median
-    const blendedMedian = gefsWeight * gefsPt.median + hrrrWeight * hrrrPt.median;
+    // Blended median from ALL models
+    let blendedMedian = 0;
+    for (const { model, point } of available) {
+      blendedMedian += (weights.get(model) ?? 0) * point.median;
+    }
 
-    // Shift GEFS uncertainty bands to center on blended median
-    const offset = blendedMedian - gefsPt.median;
+    // Blended uncertainty from ENSEMBLE models only
+    const ensembleAvailable = available.filter((a) => ensembleModelIds.has(a.model));
+    let ensembleWeightSum = 0;
+    for (const { model } of ensembleAvailable) {
+      ensembleWeightSum += weights.get(model) ?? 0;
+    }
 
-    const clamp = (v: number) => (clampMin !== undefined ? Math.max(clampMin, v) : v);
+    let blendedP10 = 0;
+    let blendedP90 = 0;
+    let blendedMin = 0;
+    let blendedMax = 0;
+    let ensembleCenter = 0;
+    for (const { model, point } of ensembleAvailable) {
+      const w =
+        ensembleWeightSum > 0
+          ? (weights.get(model) ?? 0) / ensembleWeightSum
+          : 1 / ensembleAvailable.length;
+      blendedP10 += w * point.p10;
+      blendedP90 += w * point.p90;
+      blendedMin += w * point.min;
+      blendedMax += w * point.max;
+      ensembleCenter += w * point.median;
+    }
+
+    // Shift blended bands so they center on the blended median
+    // (which includes deterministic model contributions)
+    const offset = blendedMedian - ensembleCenter;
 
     return {
-      time: gefsPt.time,
-      hoursFromNow: gefsPt.hoursFromNow,
+      time: basePt.time,
+      hoursFromNow: basePt.hoursFromNow,
       median: clamp(blendedMedian),
-      p10: clamp(gefsPt.p10 + offset),
-      p90: clamp(gefsPt.p90 + offset),
-      min: clamp(gefsPt.min + offset),
-      max: clamp(gefsPt.max + offset),
+      p10: clamp(blendedP10 + offset),
+      p90: clamp(blendedP90 + offset),
+      min: clamp(blendedMin + offset),
+      max: clamp(blendedMax + offset),
     };
   });
 }

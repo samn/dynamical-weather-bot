@@ -18,6 +18,7 @@ function makeForecastPoint(overrides: Partial<ForecastPoint> = {}): ForecastPoin
 function makeGefs(points: Partial<ForecastPoint>[] = [{}]): ModelForecast {
   return {
     model: "NOAA GEFS",
+    isEnsemble: true,
     location: { latitude: 40, longitude: -90 },
     initTime: "2026-03-16T00:00:00.000Z",
     temperature: points.map((p) => makeForecastPoint(p)),
@@ -30,6 +31,20 @@ function makeGefs(points: Partial<ForecastPoint>[] = [{}]): ModelForecast {
 function makeHrrr(points: Partial<ForecastPoint>[] = [{}]): ModelForecast {
   return {
     model: "NOAA HRRR",
+    isEnsemble: false,
+    location: { latitude: 40, longitude: -90 },
+    initTime: "2026-03-16T00:00:00.000Z",
+    temperature: points.map((p) => makeForecastPoint(p)),
+    precipitation: points.map((p) => makeForecastPoint(p)),
+    windSpeed: points.map((p) => makeForecastPoint(p)),
+    cloudCover: points.map((p) => makeForecastPoint(p)),
+  };
+}
+
+function makeEcmwf(points: Partial<ForecastPoint>[] = [{}]): ModelForecast {
+  return {
+    model: "ECMWF IFS ENS",
+    isEnsemble: true,
     location: { latitude: 40, longitude: -90 },
     initTime: "2026-03-16T00:00:00.000Z",
     temperature: points.map((p) => makeForecastPoint(p)),
@@ -342,6 +357,25 @@ describe("computeWeights", () => {
     expect(weights.get("NOAA GEFS")).toBeCloseTo(0.5, 5);
     expect(weights.get("NOAA HRRR")).toBeCloseTo(0.5, 5);
   });
+
+  it("computes weights for three models", () => {
+    const accuracy = {
+      "NOAA GEFS": { temperature_2m: { "0": 3.0 } },
+      "NOAA HRRR": { temperature_2m: { "0": 1.0 } },
+      "ECMWF IFS ENS": { temperature_2m: { "0": 2.0 } },
+    };
+    const weights = computeWeights(
+      ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS"],
+      "temperature_2m",
+      0,
+      accuracy,
+    );
+    // GEFS=1/9, HRRR=1/1, ECMWF=1/4. Total = 1/9 + 1 + 1/4 = 49/36
+    const total = 1 / 9 + 1 + 1 / 4;
+    expect(weights.get("NOAA GEFS")).toBeCloseTo(1 / 9 / total, 5);
+    expect(weights.get("NOAA HRRR")).toBeCloseTo(1 / total, 5);
+    expect(weights.get("ECMWF IFS ENS")).toBeCloseTo(1 / 4 / total, 5);
+  });
 });
 
 describe("blendForecasts", () => {
@@ -444,13 +478,15 @@ describe("blendForecasts", () => {
     expect(result.initTime).toBe(gefs.initTime);
   });
 
-  it("throws when no GEFS forecast is provided", () => {
+  it("throws when no ensemble model is provided", () => {
     const hrrr = makeHrrr();
-    expect(() => blendForecasts([hrrr], EMPTY_GRID)).toThrow("GEFS forecast is required");
+    expect(() => blendForecasts([hrrr], EMPTY_GRID)).toThrow(
+      "At least one ensemble model is required",
+    );
   });
 
   it("throws when forecasts array is empty", () => {
-    expect(() => blendForecasts([], EMPTY_GRID)).toThrow("GEFS forecast is required");
+    expect(() => blendForecasts([], EMPTY_GRID)).toThrow("At least one ensemble model is required");
   });
 
   it("matches HRRR points by rounded hoursFromNow", () => {
@@ -462,5 +498,87 @@ describe("blendForecasts", () => {
 
     // Equal weights (no accuracy data) → blended median = 15
     expect(result.temperature[0]!.median).toBeCloseTo(15, 5);
+  });
+
+  it("blends two ensemble models (GEFS + ECMWF) with equal weights", () => {
+    const gefs = makeGefs([{ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 0 }]);
+    const ecmwf = makeEcmwf([{ median: 14, p10: 11, p90: 17, min: 9, max: 19, hoursFromNow: 0 }]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    // Equal weights (no accuracy data) → average
+    expect(result.temperature[0]!.median).toBeCloseTo(12, 5);
+    // Bands are weighted average of both ensemble models' bands
+    expect(result.temperature[0]!.p10).toBeCloseTo(9.5, 5);
+    expect(result.temperature[0]!.p90).toBeCloseTo(14.5, 5);
+    expect(result.temperature[0]!.min).toBeCloseTo(7.5, 5);
+    expect(result.temperature[0]!.max).toBeCloseTo(16.5, 5);
+  });
+
+  it("blends three models (GEFS + ECMWF + HRRR) with equal weights", () => {
+    const gefs = makeGefs([{ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 0 }]);
+    const ecmwf = makeEcmwf([{ median: 14, p10: 11, p90: 17, min: 9, max: 19, hoursFromNow: 0 }]);
+    const hrrr = makeHrrr([{ median: 12, p10: 12, p90: 12, min: 12, max: 12, hoursFromNow: 0 }]);
+
+    const result = blendForecasts([gefs, ecmwf, hrrr], EMPTY_GRID);
+
+    // Equal weights (no accuracy) → median = (10+14+12)/3 = 12
+    expect(result.temperature[0]!.median).toBeCloseTo(12, 5);
+    // Ensemble bands from GEFS+ECMWF (equal ensemble weights), then shifted
+    // Ensemble center = (10+14)/2 = 12, blended median = 12, offset = 0
+    expect(result.temperature[0]!.p10).toBeCloseTo(9.5, 5);
+    expect(result.temperature[0]!.p90).toBeCloseTo(14.5, 5);
+  });
+
+  it("blends three models with accuracy-weighted ECMWF", () => {
+    // Grid with accuracy for all three models
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 3.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 1.0 } },
+            "ECMWF IFS ENS": { temperature_2m: { "0": 2.0 } },
+          },
+        },
+      },
+    };
+    const gefs = makeGefs([{ median: 10, p10: 7, p90: 13, min: 5, max: 15, hoursFromNow: 0 }]);
+    const ecmwf = makeEcmwf([{ median: 12, p10: 9, p90: 15, min: 7, max: 17, hoursFromNow: 0 }]);
+    const hrrr = makeHrrr([{ median: 14, p10: 14, p90: 14, min: 14, max: 14, hoursFromNow: 0 }]);
+
+    const result = blendForecasts([gefs, ecmwf, hrrr], grid);
+
+    // Weights: GEFS=1/9, ECMWF=1/4, HRRR=1/1. Total = 1/9 + 1/4 + 1 = 49/36
+    // GEFS norm = (1/9)/(49/36) = 4/49 ≈ 0.0816
+    // ECMWF norm = (1/4)/(49/36) = 9/49 ≈ 0.1837
+    // HRRR norm = 1/(49/36) = 36/49 ≈ 0.7347
+    const gefsW = 1 / 9 / (1 / 9 + 1 / 4 + 1);
+    const ecmwfW = 1 / 4 / (1 / 9 + 1 / 4 + 1);
+    const hrrrW = 1 / (1 / 9 + 1 / 4 + 1);
+    const expectedMedian = gefsW * 10 + ecmwfW * 12 + hrrrW * 14;
+    expect(result.temperature[0]!.median).toBeCloseTo(expectedMedian, 3);
+
+    // Ensemble weights (renormalized): GEFS and ECMWF only
+    const ensGefsW = 1 / 9 / (1 / 9 + 1 / 4);
+    const ensEcmwfW = 1 / 4 / (1 / 9 + 1 / 4);
+    const ensP10 = ensGefsW * 7 + ensEcmwfW * 9;
+    const ensP90 = ensGefsW * 13 + ensEcmwfW * 15;
+    const ensCenter = ensGefsW * 10 + ensEcmwfW * 12;
+    const offset = expectedMedian - ensCenter;
+    expect(result.temperature[0]!.p10).toBeCloseTo(ensP10 + offset, 3);
+    expect(result.temperature[0]!.p90).toBeCloseTo(ensP90 + offset, 3);
+  });
+
+  it("ECMWF-only forecast works as single ensemble model", () => {
+    const ecmwf = makeEcmwf([{ median: 15, p10: 12, p90: 18, min: 10, max: 20 }]);
+    const result = blendForecasts([ecmwf], EMPTY_GRID);
+
+    expect(result.temperature[0]!.median).toBe(15);
+    expect(result.temperature[0]!.p10).toBe(12);
+    expect(result.temperature[0]!.p90).toBe(18);
   });
 });
