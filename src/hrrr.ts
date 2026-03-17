@@ -1,6 +1,6 @@
 import * as zarr from "zarrita";
 import proj4 from "proj4";
-import type { LatLon, ModelForecast, ForecastPoint } from "./types.js";
+import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
 import { windSpeed, precipToMmHr, cloudCoverToFraction } from "./weather.js";
 
 const HRRR_STORE_URL =
@@ -78,89 +78,139 @@ function coordToNumbers(data: unknown): number[] {
   return [];
 }
 
-/**
- * Fetch HRRR forecast data for a location.
- * Returns null if the location is outside CONUS (HRRR coverage area).
- *
- * HRRR Zarr dimensions: [init_time, lead_time, y, x] — no ensemble dimension.
- */
-export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast | null> {
-  const store = new zarr.FetchStore(HRRR_STORE_URL);
-  const root = zarr.root(store);
+/** Metadata needed to fetch individual HRRR variables */
+export interface HrrrMetadata {
+  root: zarr.Location<zarr.FetchStore>;
+  initTimeIdx: number;
+  initTime: Date;
+  leadTimeHours: number[];
+  numSteps: number;
+  xIdx: number;
+  yIdx: number;
+}
 
-  // Read projection coordinates and metadata in parallel
+/** Fetch HRRR metadata. Returns null if location is outside CONUS. */
+export async function fetchHrrrMetadata(location: LatLon): Promise<HrrrMetadata | null> {
+  const store = new zarr.FetchStore(HRRR_STORE_URL);
+  const storeRoot = zarr.root(store);
+
   const [xResult, yResult, initTimeResult, leadTimeResult] = await Promise.all([
-    zarr.get(await zarr.open(root.resolve("x"), { kind: "array" })),
-    zarr.get(await zarr.open(root.resolve("y"), { kind: "array" })),
-    zarr.get(await zarr.open(root.resolve("init_time"), { kind: "array" })),
-    zarr.get(await zarr.open(root.resolve("lead_time"), { kind: "array" })),
+    zarr.get(await zarr.open(storeRoot.resolve("x"), { kind: "array" })),
+    zarr.get(await zarr.open(storeRoot.resolve("y"), { kind: "array" })),
+    zarr.get(await zarr.open(storeRoot.resolve("init_time"), { kind: "array" })),
+    zarr.get(await zarr.open(storeRoot.resolve("lead_time"), { kind: "array" })),
   ]);
 
   const xCoords = coordToNumbers(xResult.data);
   const yCoords = coordToNumbers(yResult.data);
 
-  // Check if the location falls within the HRRR grid
   const idx = geoToHrrrIndex(location.latitude, location.longitude, xCoords, yCoords);
   if (!idx) return null;
 
-  const { xIdx, yIdx } = idx;
-
-  // Get init time
   const initTimes = coordToNumbers(initTimeResult.data);
   const initTimeIdx = initTimes.length - 1;
   const initTimeSec = initTimes[initTimeIdx] ?? 0;
   const initTime = new Date(initTimeSec * 1000);
 
-  // Get lead times in hours
   const leadTimesRaw = coordToNumbers(leadTimeResult.data);
   const numSteps = Math.min(leadTimesRaw.length, MAX_STEPS);
   const leadTimeHours = leadTimesRaw.slice(0, numSteps).map((s) => s / 3600);
 
-  // Fetch all variables in parallel
-  const fetchVar = async (varName: string): Promise<number[]> => {
-    const loc = root.resolve(varName);
-    const arr = await zarr.open(loc, { kind: "array" });
-    const result = await zarr.get(arr, [initTimeIdx, zarr.slice(numSteps), yIdx, xIdx]);
-    return Array.from(result.data as Float32Array);
+  return {
+    root: storeRoot,
+    initTimeIdx,
+    initTime,
+    leadTimeHours,
+    numSteps,
+    xIdx: idx.xIdx,
+    yIdx: idx.yIdx,
   };
+}
 
-  const [tempData, precipData, windUData, windVData, cloudData] = await Promise.all([
-    fetchVar("temperature_2m"),
-    fetchVar("precipitation_surface"),
-    fetchVar("wind_u_10m"),
-    fetchVar("wind_v_10m"),
-    fetchVar("total_cloud_cover_atmosphere"),
-  ]);
-
+/** Convert raw values to ForecastPoints (deterministic — all percentiles equal the value) */
+function toPoints(values: number[], leadTimeHours: number[], initTime: Date): ForecastPoint[] {
   const now = Date.now();
+  return values.map((val, t) => {
+    const hours = leadTimeHours[t] ?? t;
+    const time = new Date(initTime.getTime() + hours * 3600 * 1000);
+    return {
+      time: time.toISOString(),
+      hoursFromNow: (time.getTime() - now) / 3600000,
+      median: val,
+      p10: val,
+      p90: val,
+      min: val,
+      max: val,
+    };
+  });
+}
 
-  const toPoints = (values: number[]): ForecastPoint[] =>
-    values.map((val, t) => {
-      const hours = leadTimeHours[t] ?? t;
-      const time = new Date(initTime.getTime() + hours * 3600 * 1000);
-      return {
-        time: time.toISOString(),
-        hoursFromNow: (time.getTime() - now) / 3600000,
-        median: val,
-        p10: val,
-        p90: val,
-        min: val,
-        max: val,
-      };
-    });
+/** Fetch a single variable from the HRRR store */
+async function fetchHrrrVar(meta: HrrrMetadata, varName: string): Promise<number[]> {
+  const loc = meta.root.resolve(varName);
+  const arr = await zarr.open(loc, { kind: "array" });
+  const result = await zarr.get(arr, [
+    meta.initTimeIdx,
+    zarr.slice(meta.numSteps),
+    meta.yIdx,
+    meta.xIdx,
+  ]);
+  return Array.from(result.data as Float32Array);
+}
 
-  // Unit conversions
-  const windSpeeds = windUData.map((u, i) => windSpeed(u, windVData[i]!));
-  const precipMmHr = precipData.map(precipToMmHr);
-  const cloudFraction = cloudData.map(cloudCoverToFraction);
+/** Fetch a single forecast variable from HRRR using pre-fetched metadata */
+export async function fetchHrrrVariable(
+  meta: HrrrMetadata,
+  variable: ForecastVariable,
+): Promise<ForecastPoint[]> {
+  const { leadTimeHours, initTime } = meta;
+
+  if (variable === "temperature") {
+    const data = await fetchHrrrVar(meta, "temperature_2m");
+    return toPoints(data, leadTimeHours, initTime);
+  }
+
+  if (variable === "precipitation") {
+    const data = await fetchHrrrVar(meta, "precipitation_surface");
+    return toPoints(data.map(precipToMmHr), leadTimeHours, initTime);
+  }
+
+  if (variable === "windSpeed") {
+    const [uData, vData] = await Promise.all([
+      fetchHrrrVar(meta, "wind_u_10m"),
+      fetchHrrrVar(meta, "wind_v_10m"),
+    ]);
+    const speeds = uData.map((u, i) => windSpeed(u, vData[i]!));
+    return toPoints(speeds, leadTimeHours, initTime);
+  }
+
+  // cloudCover
+  const data = await fetchHrrrVar(meta, "total_cloud_cover_atmosphere");
+  return toPoints(data.map(cloudCoverToFraction), leadTimeHours, initTime);
+}
+
+/**
+ * Fetch HRRR forecast data for a location.
+ * Returns null if the location is outside CONUS (HRRR coverage area).
+ */
+export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast | null> {
+  const meta = await fetchHrrrMetadata(location);
+  if (!meta) return null;
+
+  const [temperature, precipitation, ws, cloudCover] = await Promise.all([
+    fetchHrrrVariable(meta, "temperature"),
+    fetchHrrrVariable(meta, "precipitation"),
+    fetchHrrrVariable(meta, "windSpeed"),
+    fetchHrrrVariable(meta, "cloudCover"),
+  ]);
 
   return {
     model: "NOAA HRRR",
     location,
-    initTime: initTime.toISOString(),
-    temperature: toPoints(tempData),
-    precipitation: toPoints(precipMmHr),
-    windSpeed: toPoints(windSpeeds),
-    cloudCover: toPoints(cloudFraction),
+    initTime: meta.initTime.toISOString(),
+    temperature,
+    precipitation,
+    windSpeed: ws,
+    cloudCover,
   };
 }

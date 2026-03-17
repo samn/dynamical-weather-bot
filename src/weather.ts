@@ -1,5 +1,11 @@
 import * as zarr from "zarrita";
-import type { LatLon, ForecastPoint, ModelForecast, RecentWeather } from "./types.js";
+import type {
+  LatLon,
+  ForecastPoint,
+  ForecastVariable,
+  ModelForecast,
+  RecentWeather,
+} from "./types.js";
 import { normalizeLongitude } from "./geo.js";
 
 const FORECAST_STORE_URL =
@@ -243,68 +249,112 @@ export async function fetchLatestInitTime(): Promise<string> {
   return initTime.toISOString();
 }
 
-/** Fetch the full 72-hour probabilistic GEFS forecast for a location */
-export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast> {
+/** Metadata needed to fetch individual GEFS variables */
+export interface GefsMetadata {
+  store: zarr.FetchStore;
+  initIdx: number;
+  initTime: Date;
+  leadTimeHours: number[];
+  latIdx: number;
+  lonIdx: number;
+  numEnsemble: number;
+}
+
+/** Fetch GEFS metadata (init time, lead times, grid indices) without fetching variable data */
+export async function fetchGefsMetadata(location: LatLon): Promise<GefsMetadata> {
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
-
   const store = new zarr.FetchStore(FORECAST_STORE_URL);
 
-  // Get the latest init time and lead time hours
   const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
     getLatestInitTimeIndex(store),
     getLeadTimeHours(store, STEPS_72H),
   ]);
 
-  const numEnsemble = 31;
+  return { store, initIdx, initTime, leadTimeHours, latIdx, lonIdx, numEnsemble: 31 };
+}
 
-  // Fetch all variables in parallel
-  const [tempData, precipData, windUData, windVData, cloudData] = await Promise.all([
-    fetchForecastVariable(store, "temperature_2m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
-    fetchForecastVariable(
+/** Fetch a single forecast variable from GEFS using pre-fetched metadata */
+export async function fetchGefsVariable(
+  meta: GefsMetadata,
+  variable: ForecastVariable,
+): Promise<ForecastPoint[]> {
+  const { store, initIdx, latIdx, lonIdx, numEnsemble, leadTimeHours, initTime } = meta;
+  const steps = STEPS_72H;
+
+  if (variable === "temperature") {
+    const data = await fetchForecastVariable(
+      store,
+      "temperature_2m",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      steps,
+    );
+    return toForecastPoints(data, leadTimeHours, initTime);
+  }
+
+  if (variable === "precipitation") {
+    const data = await fetchForecastVariable(
       store,
       "precipitation_surface",
       initIdx,
       latIdx,
       lonIdx,
       numEnsemble,
-      STEPS_72H,
-    ),
-    fetchForecastVariable(store, "wind_u_10m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
-    fetchForecastVariable(store, "wind_v_10m", initIdx, latIdx, lonIdx, numEnsemble, STEPS_72H),
-    fetchForecastVariable(
-      store,
-      "total_cloud_cover_atmosphere",
-      initIdx,
-      latIdx,
-      lonIdx,
-      numEnsemble,
-      STEPS_72H,
-    ),
-  ]);
+      steps,
+    );
+    return toForecastPoints(
+      data.map((row) => row.map(precipToMmHr)),
+      leadTimeHours,
+      initTime,
+    );
+  }
 
-  // temperature_2m is already in Celsius from dynamical.org
-  const tempCelsius: number[][] = tempData;
+  if (variable === "windSpeed") {
+    const [uData, vData] = await Promise.all([
+      fetchForecastVariable(store, "wind_u_10m", initIdx, latIdx, lonIdx, numEnsemble, steps),
+      fetchForecastVariable(store, "wind_v_10m", initIdx, latIdx, lonIdx, numEnsemble, steps),
+    ]);
+    const speedData = uData.map((uRow, e) => uRow.map((u, t) => windSpeed(u, vData[e]![t]!)));
+    return toForecastPoints(speedData, leadTimeHours, initTime);
+  }
 
-  // Compute wind speed from u/v components
-  const windSpeedData: number[][] = windUData.map((uRow, e) =>
-    uRow.map((u, t) => windSpeed(u, windVData[e]![t]!)),
+  // cloudCover
+  const data = await fetchForecastVariable(
+    store,
+    "total_cloud_cover_atmosphere",
+    initIdx,
+    latIdx,
+    lonIdx,
+    numEnsemble,
+    steps,
   );
+  return toForecastPoints(
+    data.map((row) => row.map(cloudCoverToFraction)),
+    leadTimeHours,
+    initTime,
+  );
+}
 
-  // Convert precipitation rate to mm/hr
-  const precipMmHr: number[][] = precipData.map((row) => row.map(precipToMmHr));
-
-  // Convert cloud cover from percent to fraction
-  const cloudFraction: number[][] = cloudData.map((row) => row.map(cloudCoverToFraction));
-
+/** Fetch the full 72-hour probabilistic GEFS forecast for a location */
+export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast> {
+  const meta = await fetchGefsMetadata(location);
+  const [temperature, precipitation, ws, cloudCover] = await Promise.all([
+    fetchGefsVariable(meta, "temperature"),
+    fetchGefsVariable(meta, "precipitation"),
+    fetchGefsVariable(meta, "windSpeed"),
+    fetchGefsVariable(meta, "cloudCover"),
+  ]);
   return {
     model: "NOAA GEFS",
     location,
-    initTime: initTime.toISOString(),
-    temperature: toForecastPoints(tempCelsius, leadTimeHours, initTime),
-    precipitation: toForecastPoints(precipMmHr, leadTimeHours, initTime),
-    windSpeed: toForecastPoints(windSpeedData, leadTimeHours, initTime),
-    cloudCover: toForecastPoints(cloudFraction, leadTimeHours, initTime),
+    initTime: meta.initTime.toISOString(),
+    temperature,
+    precipitation,
+    windSpeed: ws,
+    cloudCover,
   };
 }
 

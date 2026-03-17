@@ -57,6 +57,185 @@ interface ConvertedPoint extends ForecastPoint {
 const chartStates = new WeakMap<HTMLCanvasElement, ChartState>();
 const listenersAttached = new WeakSet<HTMLCanvasElement>();
 
+/** Active skeleton animation state, keyed by canvas */
+const skeletonAnimations = new WeakMap<HTMLCanvasElement, { stop: boolean }>();
+
+/** Sine curve parameters for skeleton animation */
+const SKELETON_CURVES = [
+  { amplitudeScale: 1.0, phaseOffset: 0, opacity: 0.25 },
+  { amplitudeScale: 0.7, phaseOffset: 0.8, opacity: 0.18 },
+  { amplitudeScale: 1.2, phaseOffset: 1.6, opacity: 0.12 },
+  { amplitudeScale: 0.85, phaseOffset: 2.4, opacity: 0.15 },
+];
+
+interface SkeletonLayout {
+  displayWidth: number;
+  displayHeight: number;
+  padding: { top: number; right: number; bottom: number; left: number };
+  chartWidth: number;
+  chartHeight: number;
+}
+
+function getSkeletonLayout(canvas: HTMLCanvasElement): SkeletonLayout {
+  const rect = canvas.getBoundingClientRect();
+  const displayWidth = rect.width;
+  const displayHeight = rect.height;
+  const compact = displayWidth < 400;
+  const padding = {
+    top: 10,
+    right: compact ? 8 : 16,
+    bottom: compact ? 28 : 32,
+    left: compact ? 40 : 50,
+  };
+  return {
+    displayWidth,
+    displayHeight,
+    padding,
+    chartWidth: displayWidth - padding.left - padding.right,
+    chartHeight: displayHeight - padding.top - padding.bottom,
+  };
+}
+
+function drawSkeletonAxes(ctx: CanvasRenderingContext2D, layout: SkeletonLayout): void {
+  const { padding, chartWidth, chartHeight } = layout;
+
+  ctx.strokeStyle = "#2a2d3a";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, padding.top);
+  ctx.lineTo(padding.left, padding.top + chartHeight);
+  ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+  ctx.stroke();
+
+  const gridLines = 4;
+  for (let i = 1; i < gridLines; i++) {
+    const y = padding.top + (i / gridLines) * chartHeight;
+    ctx.strokeStyle = "#1a1d2720";
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(padding.left + chartWidth, y);
+    ctx.stroke();
+  }
+}
+
+function drawSkeletonCurves(
+  ctx: CanvasRenderingContext2D,
+  layout: SkeletonLayout,
+  time: number,
+  amplitudeFactor: number,
+  globalOpacity: number,
+): void {
+  const { padding, chartWidth, chartHeight } = layout;
+  const baselineY = padding.top + chartHeight * 0.5;
+  const amplitude = chartHeight * 0.2 * amplitudeFactor;
+  const frequency = (2.5 * Math.PI) / chartWidth;
+  const phaseSpeed = 0.8;
+
+  for (const curve of SKELETON_CURVES) {
+    const curveAmplitude = amplitude * curve.amplitudeScale;
+    const phase = time * phaseSpeed + curve.phaseOffset;
+    const alpha = curve.opacity * globalOpacity;
+
+    ctx.strokeStyle = `rgba(139, 143, 163, ${alpha})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let px = 0; px <= chartWidth; px += 2) {
+      const x = padding.left + px;
+      const y = baselineY - Math.sin(px * frequency + phase) * curveAmplitude;
+      if (px === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+
+/**
+ * Start a skeleton loading animation on a canvas.
+ * Draws axes and animated sinusoidal placeholder curves.
+ */
+export function renderChartSkeleton(canvas: HTMLCanvasElement): void {
+  // Stop any existing skeleton animation on this canvas
+  const existing = skeletonAnimations.get(canvas);
+  if (existing) existing.stop = true;
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const state = { stop: false };
+  skeletonAnimations.set(canvas, state);
+
+  const layout = getSkeletonLayout(canvas);
+  let startTime: number | undefined;
+
+  function frame(timestamp: number): void {
+    if (state.stop) return;
+    if (startTime === undefined) startTime = timestamp;
+    const elapsed = (timestamp - startTime) / 1000;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, layout.displayWidth, layout.displayHeight);
+    drawSkeletonAxes(ctx, layout);
+    drawSkeletonCurves(ctx, layout, elapsed, 1, 1);
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+/**
+ * Transition a skeleton chart out by shrinking curves to the x-axis and fading.
+ * Returns a promise that resolves when the exit animation is complete.
+ */
+export function stopChartSkeleton(canvas: HTMLCanvasElement): Promise<void> {
+  const existing = skeletonAnimations.get(canvas);
+  if (!existing) return Promise.resolve();
+
+  // Stop the idle animation loop
+  existing.stop = true;
+
+  const dpr = window.devicePixelRatio || 1;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.resolve();
+
+  const layout = getSkeletonLayout(canvas);
+  const exitDuration = 300;
+
+  return new Promise((resolve) => {
+    const exitStart = performance.now();
+    // Capture the phase time so the curves continue smoothly
+    const phaseTime = (exitStart - (performance.timeOrigin || exitStart)) / 1000;
+
+    function exitFrame(timestamp: number): void {
+      const elapsed = timestamp - exitStart;
+      const progress = Math.min(1, elapsed / exitDuration);
+      // Ease out
+      const eased = 1 - (1 - progress) * (1 - progress);
+
+      const amplitudeFactor = 1 - eased;
+      const globalOpacity = 1 - eased;
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, layout.displayWidth, layout.displayHeight);
+      drawSkeletonAxes(ctx, layout);
+      drawSkeletonCurves(ctx, layout, phaseTime, amplitudeFactor, globalOpacity);
+
+      if (progress < 1) {
+        requestAnimationFrame(exitFrame);
+      } else {
+        skeletonAnimations.delete(canvas);
+        resolve();
+      }
+    }
+
+    requestAnimationFrame(exitFrame);
+  });
+}
+
 /**
  * Render a probabilistic forecast chart on a canvas element.
  * Shows:
