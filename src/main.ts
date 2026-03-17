@@ -1,10 +1,26 @@
-import type { LatLon, ForecastData, Aberration, AccuracyGrid } from "./types.js";
+import type { LatLon, ForecastData, ForecastVariable, Aberration, AccuracyGrid } from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
-import { fetchGefsForecast, fetchRecentWeather, fetchLatestInitTime } from "./weather.js";
-import { fetchHrrrForecast, fetchLatestHrrrInitTime } from "./hrrr.js";
-import { blendForecasts } from "./blend.js";
+import {
+  fetchGefsForecast,
+  fetchGefsMetadata,
+  fetchGefsVariable,
+  fetchRecentWeather,
+  fetchLatestInitTime,
+} from "./weather.js";
+import {
+  fetchHrrrForecast,
+  fetchHrrrMetadata,
+  fetchHrrrVariable,
+  fetchLatestHrrrInitTime,
+} from "./hrrr.js";
+import { blendForecasts, blendSingleVariable } from "./blend.js";
 import { detectAberrations } from "./aberrations.js";
-import { renderChart, type IntensityBand } from "./chart.js";
+import {
+  renderChart,
+  renderChartSkeleton,
+  stopChartSkeleton,
+  type IntensityBand,
+} from "./chart.js";
 import { getCached, setCache } from "./cache.js";
 import { formatInitTime } from "./format.js";
 import {
@@ -145,49 +161,74 @@ const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
   },
 ];
 
+/** Canvas ID for each forecast variable */
+const VARIABLE_CANVAS: Record<ForecastVariable, string> = {
+  temperature: "temp-chart",
+  precipitation: "precip-chart",
+  windSpeed: "wind-chart",
+  cloudCover: "cloud-chart",
+};
+
+/** Build chart render options (excluding canvas and data) for a variable */
+function chartOptsForVariable(variable: ForecastVariable): {
+  label: string;
+  unit: string;
+  color: string;
+  convertValue?: (v: number) => number;
+  formatValue: (v: number) => string;
+  intensityBands?: IntensityBand[];
+} {
+  const imperial = getUnitSystem() === "imperial";
+  switch (variable) {
+    case "temperature":
+      return {
+        label: "Temperature",
+        unit: imperial ? "\u00B0F" : "\u00B0C",
+        color: "#f5a623",
+        convertValue: imperial ? celsiusToFahrenheit : undefined,
+        formatValue: (v) => v.toFixed(0),
+      };
+    case "precipitation":
+      return {
+        label: "Precipitation",
+        unit: imperial ? "in/h" : "mm/h",
+        color: "#66b3ff",
+        convertValue: imperial ? mmhrToInhr : undefined,
+        formatValue: (v) => v.toFixed(imperial ? 2 : 1),
+        intensityBands: imperial ? PRECIP_BANDS_IMPERIAL : PRECIP_BANDS_METRIC,
+      };
+    case "windSpeed":
+      return {
+        label: "Wind Speed",
+        unit: imperial ? "mph" : "m/s",
+        color: "#81c784",
+        convertValue: imperial ? msToMph : undefined,
+        formatValue: (v) => v.toFixed(0),
+      };
+    case "cloudCover":
+      return {
+        label: "Cloud Cover",
+        unit: "",
+        color: "#b0bec5",
+        formatValue: (v) => `${(v * 100).toFixed(0)}%`,
+      };
+  }
+}
+
+/** Render a single variable's chart */
+function renderVariableChart(
+  variable: ForecastVariable,
+  data: import("./types.js").ForecastPoint[],
+): void {
+  const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
+  renderChart({ canvas, data, ...chartOptsForVariable(variable) });
+}
+
 function renderCharts(forecast: ForecastData): void {
-  const units = getUnitSystem();
-  const imperial = units === "imperial";
-
-  renderChart({
-    canvas: document.getElementById("temp-chart") as HTMLCanvasElement,
-    data: forecast.temperature,
-    label: "Temperature",
-    unit: imperial ? "\u00B0F" : "\u00B0C",
-    color: "#f5a623",
-    convertValue: imperial ? celsiusToFahrenheit : undefined,
-    formatValue: (v) => v.toFixed(0),
-  });
-
-  renderChart({
-    canvas: document.getElementById("precip-chart") as HTMLCanvasElement,
-    data: forecast.precipitation,
-    label: "Precipitation",
-    unit: imperial ? "in/h" : "mm/h",
-    color: "#66b3ff",
-    convertValue: imperial ? mmhrToInhr : undefined,
-    formatValue: (v) => v.toFixed(imperial ? 2 : 1),
-    intensityBands: imperial ? PRECIP_BANDS_IMPERIAL : PRECIP_BANDS_METRIC,
-  });
-
-  renderChart({
-    canvas: document.getElementById("wind-chart") as HTMLCanvasElement,
-    data: forecast.windSpeed,
-    label: "Wind Speed",
-    unit: imperial ? "mph" : "m/s",
-    color: "#81c784",
-    convertValue: imperial ? msToMph : undefined,
-    formatValue: (v) => v.toFixed(0),
-  });
-
-  renderChart({
-    canvas: document.getElementById("cloud-chart") as HTMLCanvasElement,
-    data: forecast.cloudCover,
-    label: "Cloud Cover",
-    unit: "",
-    color: "#b0bec5",
-    formatValue: (v) => `${(v * 100).toFixed(0)}%`,
-  });
+  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+  for (const v of variables) {
+    renderVariableChart(v, forecast[v]);
+  }
 }
 
 /**
@@ -236,61 +277,114 @@ async function checkForNewerForecast(location: LatLon, cachedInitTime: string): 
   }
 }
 
+/** Show forecast container with skeleton charts for progressive loading */
+function showSkeletonCharts(): void {
+  setButtonsDisabled(true);
+  loadingEl.classList.add("hidden");
+  errorEl.classList.add("hidden");
+  forecastEl.classList.remove("hidden");
+  aberrationsEl.innerHTML = "";
+  initTimeLabel.textContent = "";
+
+  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+  for (const v of variables) {
+    const canvas = document.getElementById(VARIABLE_CANVAS[v]) as HTMLCanvasElement;
+    renderChartSkeleton(canvas);
+  }
+}
+
 async function loadForecast(location: LatLon): Promise<void> {
-  showLoading();
   locationLabel.textContent = `${location.latitude.toFixed(2)}\u00B0N, ${location.longitude.toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
 
   try {
-    let forecast: ForecastData;
-    let recentWeather: import("./types.js").RecentWeather;
-
-    // Check cache, but validate against the latest available init_time
+    // Check cache first — if valid, render immediately without skeletons
     const cached = getCached(location.latitude, location.longitude);
     let useCache = false;
     if (cached) {
+      showLoading();
       try {
         const latestInitTime = await fetchLatestAnyInitTime();
         useCache = latestInitTime <= cached.forecast.initTime;
       } catch {
-        // Network error checking init time — use cache as fallback
         useCache = true;
       }
     }
 
     if (useCache && cached) {
-      forecast = cached.forecast;
-      recentWeather = cached.recentWeather;
-    } else {
-      const [gefsForecast, hrrrForecast, recentData] = await Promise.all([
-        fetchGefsForecast(location),
-        fetchHrrrForecast(location),
-        fetchRecentWeather(location),
-      ]);
-      const modelForecasts = [gefsForecast];
-      if (hrrrForecast) modelForecasts.push(hrrrForecast);
-      forecast = blendForecasts(modelForecasts, loadAccuracyGrid());
-      recentWeather = recentData;
-      setCache(location.latitude, location.longitude, forecast, recentWeather);
+      lastForecast = cached.forecast;
+      lastRecentWeather = cached.recentWeather;
+      initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
+      const aberrations = detectAberrations(cached.forecast, cached.recentWeather, getUnitSystem());
+      renderAberrations(aberrations);
+      showForecast();
+      renderCharts(cached.forecast);
+      checkForNewerForecast(location, cached.forecast.initTime);
+      return;
     }
 
-    // Store for re-rendering on resize and unit toggle
+    // No cache — show skeleton charts and progressively load data
+    showSkeletonCharts();
+
+    // Fetch metadata for both models in parallel, plus recent weather
+    const [gefsMeta, hrrrMeta] = await Promise.all([
+      fetchGefsMetadata(location),
+      fetchHrrrMetadata(location),
+    ]);
+
+    // Show init time as soon as metadata is available
+    const gefsInitIso = gefsMeta.initTime.toISOString();
+    const hrrrInitIso = hrrrMeta?.initTime.toISOString() ?? "";
+    const latestInitTime = hrrrInitIso > gefsInitIso ? hrrrInitIso : gefsInitIso;
+    initTimeLabel.textContent = formatInitTime(latestInitTime);
+
+    // Kick off all variable fetches + recent weather in parallel
+    const grid = loadAccuracyGrid();
+    const variables: ForecastVariable[] = [
+      "temperature",
+      "precipitation",
+      "windSpeed",
+      "cloudCover",
+    ];
+    const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
+
+    const variablePromises = variables.map(async (variable) => {
+      const [gefsPoints, hrrrPoints] = await Promise.all([
+        fetchGefsVariable(gefsMeta, variable),
+        hrrrMeta ? fetchHrrrVariable(hrrrMeta, variable) : Promise.resolve(null),
+      ]);
+
+      const blended = blendSingleVariable(variable, gefsPoints, hrrrPoints, location, grid);
+      results[variable] = blended;
+
+      // Animate skeleton out, then render real chart
+      const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
+      await stopChartSkeleton(canvas);
+      renderVariableChart(variable, blended);
+    });
+
+    const recentWeatherPromise = fetchRecentWeather(location);
+
+    const [recentWeather] = await Promise.all([recentWeatherPromise, ...variablePromises]);
+
+    // Build complete ForecastData
+    const forecast: ForecastData = {
+      location,
+      initTime: latestInitTime,
+      temperature: results.temperature!,
+      precipitation: results.precipitation!,
+      windSpeed: results.windSpeed!,
+      cloudCover: results.cloudCover!,
+    };
+
     lastForecast = forecast;
     lastRecentWeather = recentWeather;
+    setCache(location.latitude, location.longitude, forecast, recentWeather);
 
-    // Display init time
-    initTimeLabel.textContent = formatInitTime(forecast.initTime);
-
-    // Detect aberrations
+    // Aberrations render after all data is available
     const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
     renderAberrations(aberrations);
+    setButtonsDisabled(false);
 
-    // Show forecast container before rendering so canvases have dimensions
-    showForecast();
-
-    // Render charts
-    renderCharts(forecast);
-
-    // Check for newer init time in the background (handles store updates during session)
     checkForNewerForecast(location, forecast.initTime);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error occurred";

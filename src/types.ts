@@ -82,6 +82,9 @@ export interface AccuracyCell {
   }>;
 }
 
+/** The four forecast variable keys */
+export type ForecastVariable = "temperature" | "precipitation" | "windSpeed" | "cloudCover";
+
 /** A weather aberration to highlight to the user */
 export interface Aberration {
   type: "warm" | "cool" | "rain" | "danger";

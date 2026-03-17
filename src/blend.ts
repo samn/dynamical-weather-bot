@@ -5,6 +5,7 @@ import type {
   AccuracyCell,
   ForecastData,
   ForecastPoint,
+  ForecastVariable,
   LatLon,
 } from "./types.js";
 
@@ -195,6 +196,30 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
     windSpeed: blendVariable("windSpeed", gefs.windSpeed, hrrr.windSpeed, models, accuracy, 0),
     cloudCover: blendVariable("cloudCover", gefs.cloudCover, hrrr.cloudCover, models, accuracy, 0),
   };
+}
+
+/** Clamp minimums for variables that cannot be negative */
+const CLAMP_MIN: Partial<Record<ForecastVariable, number>> = {
+  precipitation: 0,
+  windSpeed: 0,
+  cloudCover: 0,
+};
+
+/**
+ * Blend a single forecast variable from GEFS and (optionally) HRRR.
+ * Use this for progressive per-variable rendering.
+ */
+export function blendSingleVariable(
+  varKey: ForecastVariable,
+  gefsPoints: ForecastPoint[],
+  hrrrPoints: ForecastPoint[] | null,
+  location: LatLon,
+  grid: AccuracyGrid,
+): ForecastPoint[] {
+  if (!hrrrPoints) return gefsPoints;
+  const accuracy = lookupAccuracy(location, grid);
+  const models: ModelId[] = ["NOAA GEFS", "NOAA HRRR"];
+  return blendVariable(varKey, gefsPoints, hrrrPoints, models, accuracy, CLAMP_MIN[varKey]);
 }
 
 /**
