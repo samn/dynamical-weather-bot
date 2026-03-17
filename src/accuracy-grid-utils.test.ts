@@ -9,17 +9,17 @@ import {
 describe("snapToGrid", () => {
   it("snaps to lower grid boundary", () => {
     expect(snapToGrid(40.3)).toBe(40.0);
-    expect(snapToGrid(40.7)).toBe(40.5);
+    expect(snapToGrid(40.7)).toBe(40.0);
   });
 
   it("handles exact grid values", () => {
     expect(snapToGrid(40.0)).toBe(40.0);
-    expect(snapToGrid(40.5)).toBe(40.5);
+    expect(snapToGrid(41.0)).toBe(41.0);
   });
 
   it("handles negative values", () => {
     expect(snapToGrid(-89.8)).toBe(-90.0);
-    expect(snapToGrid(-89.3)).toBe(-89.5);
+    expect(snapToGrid(-89.3)).toBe(-90.0);
   });
 });
 
