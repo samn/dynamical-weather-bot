@@ -163,8 +163,9 @@ export function renderChartSkeleton(canvas: HTMLCanvasElement): void {
   canvas.width = rect.width * dpr;
   canvas.height = rect.height * dpr;
 
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  const maybeCtx = canvas.getContext("2d");
+  if (!maybeCtx) return;
+  const ctx: CanvasRenderingContext2D = maybeCtx;
 
   const state = { stop: false };
   skeletonAnimations.set(canvas, state);
@@ -199,8 +200,9 @@ export function stopChartSkeleton(canvas: HTMLCanvasElement): Promise<void> {
   existing.stop = true;
 
   const dpr = window.devicePixelRatio || 1;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return Promise.resolve();
+  const maybeCtx = canvas.getContext("2d");
+  if (!maybeCtx) return Promise.resolve();
+  const ctx: CanvasRenderingContext2D = maybeCtx;
 
   const layout = getSkeletonLayout(canvas);
   const exitDuration = 300;
