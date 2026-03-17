@@ -9,6 +9,16 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parquetRead } from "hyparquet";
+import { haversineKm } from "../src/geo.js";
+import {
+  GRID_RES,
+  snapToGrid,
+  parseStationsCsv,
+  leadTimeToHourBin,
+  parseParquetRow,
+  type Station,
+  type StatRow,
+} from "./accuracy-grid-utils.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(__dirname, "..", "src", "generated");
@@ -17,11 +27,8 @@ const OUT_PATH = join(OUT_DIR, "accuracy-grid.json");
 const STATS_URL = "https://sa.dynamical.org/statistics.parquet";
 const STATIONS_URL = "https://sa.dynamical.org/stations.csv";
 
-/** 90-day window in microseconds (dynamical uses int64 microseconds) */
+/** 90-day window in nanoseconds (dynamical uses int64 nanoseconds) */
 const WINDOW_90D = 7776000000000000;
-
-/** Grid resolution in degrees */
-const GRID_RES = 0.5;
 
 /** CONUS bounding box */
 const BOUNDS = { minLat: 24.0, maxLat: 50.0, minLon: -130.0, maxLon: -65.0 };
@@ -38,50 +45,15 @@ const VARIABLE_METRICS: Record<string, string> = {
   precipitation_surface: "MAE",
 };
 
-/** Lead time bins we care about (hours) */
-const LEAD_BINS = [0, 24, 48];
-
-interface Station {
-  id: string;
-  latitude: number;
-  longitude: number;
-}
-
-interface StatRow {
-  station_id: string;
-  model: string;
-  variable: string;
-  metric: string;
-  window: number;
-  lead_time: number;
-  value: number;
-}
-
 interface GridCell {
   stationCount: number;
   metrics: Record<string, Record<string, Record<string, number>>>;
   nearbyStations?: Array<{
     id: string;
-    distance: number;
+    latitude: number;
+    longitude: number;
     metrics: Record<string, Record<string, Record<string, number>>>;
   }>;
-}
-
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function snapToGrid(val: number): number {
-  return Math.floor(val / GRID_RES) * GRID_RES;
 }
 
 async function fetchBuffer(url: string): Promise<ArrayBuffer> {
@@ -98,47 +70,6 @@ async function fetchText(url: string): Promise<string> {
   return resp.text();
 }
 
-function parseStationsCsv(csv: string): Map<string, Station> {
-  const stations = new Map<string, Station>();
-  const lines = csv.trim().split("\n");
-  const header = lines[0]?.split(",") ?? [];
-  const idIdx = header.indexOf("station_id");
-  const latIdx = header.indexOf("latitude");
-  const lonIdx = header.indexOf("longitude");
-  if (idIdx < 0 || latIdx < 0 || lonIdx < 0) {
-    throw new Error(`stations.csv missing required columns. Header: ${header.join(",")}`);
-  }
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i]?.split(",");
-    if (!cols) continue;
-    const id = cols[idIdx];
-    const lat = parseFloat(cols[latIdx] ?? "");
-    const lon = parseFloat(cols[lonIdx] ?? "");
-    if (id && isFinite(lat) && isFinite(lon)) {
-      stations.set(id, { id, latitude: lat, longitude: lon });
-    }
-  }
-  return stations;
-}
-
-/** Convert lead_time (seconds or nanoseconds) to the nearest lead bin in hours */
-function leadTimeToHourBin(leadTimeVal: number): number | undefined {
-  // lead_time is in nanoseconds in some datasets, seconds in others
-  // Try to detect: if > 1e12, it's likely nanoseconds
-  let hours: number;
-  if (Math.abs(leadTimeVal) > 1e12) {
-    hours = Math.round(leadTimeVal / 3.6e12); // nanoseconds to hours
-  } else if (Math.abs(leadTimeVal) > 1e6) {
-    hours = Math.round(leadTimeVal / 3.6e9); // microseconds to hours
-  } else {
-    hours = Math.round(leadTimeVal / 3600); // seconds to hours
-  }
-  // Snap to nearest bin
-  const bin = LEAD_BINS.reduce((best, b) => (Math.abs(hours - b) < Math.abs(hours - best) ? b : best), LEAD_BINS[0]!);
-  if (Math.abs(hours - bin) <= 6) return bin;
-  return undefined;
-}
-
 async function main() {
   const [parquetBuf, stationsCsv] = await Promise.all([fetchBuffer(STATS_URL), fetchText(STATIONS_URL)]);
 
@@ -150,21 +81,10 @@ async function main() {
   await parquetRead({
     file: parquetBuf,
     onComplete: (data: unknown[][]) => {
-      // data is array of rows, each row is array of column values
-      // We need to find column ordering from the schema
       for (const row of data) {
-        if (!Array.isArray(row) || row.length < 7) continue;
-        // Columns: station_id, model, variable, metric, window, lead_time, value
-        // (We'll try to match by parsing the structure)
-        rows.push({
-          station_id: String(row[0]),
-          model: String(row[1]),
-          variable: String(row[2]),
-          metric: String(row[3]),
-          window: Number(row[4]),
-          lead_time: Number(row[5]),
-          value: Number(row[6]),
-        });
+        if (!Array.isArray(row)) continue;
+        const parsed = parseParquetRow(row);
+        if (parsed) rows.push(parsed);
       }
     },
   });
@@ -280,12 +200,13 @@ async function main() {
         metrics: cellMetrics,
       };
 
-      // For dense cells, store 3 nearest stations
-      if (nearby.length >= 5) {
+      // For cells with enough stations, store the nearest with their coordinates
+      if (nearby.length >= 3) {
         nearby.sort((a, b) => a.distance - b.distance);
-        cell.nearbyStations = nearby.slice(0, 3).map((n) => ({
+        cell.nearbyStations = nearby.slice(0, 10).map((n) => ({
           id: n.station.id,
-          distance: Math.round(n.distance * 10) / 10,
+          latitude: n.station.latitude,
+          longitude: n.station.longitude,
           metrics: n.metrics,
         }));
       }

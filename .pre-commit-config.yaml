@@ -1,4 +1,9 @@
 repos:
+  - repo: builtin
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=500, --enforce-all]
+
   - repo: local
     hooks:
       - id: oxfmt

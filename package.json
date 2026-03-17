@@ -5,7 +5,7 @@
   "description": "Probabilistic weather forecast powered by dynamical.org GEFS ensemble data",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run generate:accuracy && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "fmt": "oxfmt src/",

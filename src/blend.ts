@@ -2,15 +2,24 @@ import type {
   ModelId,
   ModelForecast,
   AccuracyGrid,
-  AccuracyCell,
+  NearbyStation,
   ForecastData,
   ForecastPoint,
   ForecastVariable,
   LatLon,
 } from "./types.js";
+import { haversineKm } from "./geo.js";
+
+/** Max distance (km) for per-station IDW at runtime */
+const MAX_STATION_RADIUS_KM = 50;
+
+/** Minimum distance cap (km) to avoid division-by-zero in IDW */
+const MIN_STATION_DISTANCE_KM = 1;
 
 /**
  * Look up accuracy metrics for a location from the grid.
+ * When nearby stations are available, uses IDW weighting from the user's
+ * actual location so the closest station's metrics dominate.
  * Returns accuracy data per model, or undefined if outside grid coverage.
  */
 export function lookupAccuracy(
@@ -23,46 +32,58 @@ export function lookupAccuracy(
   const cell = grid.cells[key];
   if (!cell) return undefined;
 
-  // If the cell has nearby stations and one is very close, blend its metrics
-  if (cell.nearbyStations && cell.nearbyStations.length > 0) {
-    const closest = cell.nearbyStations[0]!;
-    if (closest.distance < 25) {
-      return blendCellWithStation(cell, closest);
+  if (!cell.nearbyStations || cell.nearbyStations.length === 0) {
+    return cell.metrics;
+  }
+
+  // Compute actual distance from user location to each station
+  const withDistance = cell.nearbyStations
+    .map((s) => ({
+      station: s,
+      distance: haversineKm(location.latitude, location.longitude, s.latitude, s.longitude),
+    }))
+    .filter((s) => s.distance <= MAX_STATION_RADIUS_KM);
+
+  if (withDistance.length === 0) {
+    return cell.metrics;
+  }
+
+  return blendStationMetrics(withDistance);
+}
+
+/** IDW-blend metrics across multiple stations weighted by distance from user */
+function blendStationMetrics(
+  stations: Array<{ station: NearbyStation; distance: number }>,
+): Record<string, Record<string, Record<string, number>>> {
+  const result: Record<string, Record<string, Record<string, number>>> = {};
+  const weightSums: Record<string, Record<string, Record<string, number>>> = {};
+
+  for (const { station, distance } of stations) {
+    const w = 1 / Math.pow(Math.max(distance, MIN_STATION_DISTANCE_KM), 2);
+
+    for (const [model, vars] of Object.entries(station.metrics)) {
+      if (!result[model]) result[model] = {};
+      if (!weightSums[model]) weightSums[model] = {};
+
+      for (const [varName, leads] of Object.entries(vars)) {
+        if (!result[model]![varName]) result[model]![varName] = {};
+        if (!weightSums[model]![varName]) weightSums[model]![varName] = {};
+
+        for (const [lead, val] of Object.entries(leads)) {
+          result[model]![varName]![lead] = (result[model]![varName]![lead] ?? 0) + w * val;
+          weightSums[model]![varName]![lead] = (weightSums[model]![varName]![lead] ?? 0) + w;
+        }
+      }
     }
   }
 
-  return cell.metrics;
-}
-
-/** Blend grid cell average with a nearby station's metrics (50/50 for close stations) */
-function blendCellWithStation(
-  cell: AccuracyCell,
-  station: { metrics: Record<string, Record<string, Record<string, number>>> },
-): Record<string, Record<string, Record<string, number>>> {
-  const result: Record<string, Record<string, Record<string, number>>> = {};
-
-  // Collect all model keys from both sources
-  const models = new Set([...Object.keys(cell.metrics), ...Object.keys(station.metrics)]);
-
-  for (const model of models) {
-    result[model] = {};
-    const cellVars = cell.metrics[model] ?? {};
-    const stationVars = station.metrics[model] ?? {};
-    const variables = new Set([...Object.keys(cellVars), ...Object.keys(stationVars)]);
-
-    for (const varName of variables) {
-      result[model]![varName] = {};
-      const cellLeads = cellVars[varName] ?? {};
-      const stationLeads = stationVars[varName] ?? {};
-      const leads = new Set([...Object.keys(cellLeads), ...Object.keys(stationLeads)]);
-
-      for (const lead of leads) {
-        const cv = cellLeads[lead];
-        const sv = stationLeads[lead];
-        if (cv !== undefined && sv !== undefined) {
-          result[model]![varName]![lead] = (cv + sv) / 2;
-        } else {
-          result[model]![varName]![lead] = cv ?? sv ?? 0;
+  // Normalize
+  for (const [model, vars] of Object.entries(result)) {
+    for (const [varName, leads] of Object.entries(vars)) {
+      for (const lead of Object.keys(leads)) {
+        const ws = weightSums[model]?.[varName]?.[lead];
+        if (ws && ws > 0) {
+          result[model]![varName]![lead] = result[model]![varName]![lead]! / ws;
         }
       }
     }
