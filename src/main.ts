@@ -13,7 +13,13 @@ import {
   fetchHrrrVariable,
   fetchLatestHrrrInitTime,
 } from "./hrrr.js";
-import { blendForecasts, blendSingleVariable } from "./blend.js";
+import {
+  fetchEcmwfForecast,
+  fetchEcmwfMetadata,
+  fetchEcmwfVariable,
+  fetchLatestEcmwfInitTime,
+} from "./ecmwf.js";
+import { blendForecasts, blendSingleVariable, type ModelVariableInput } from "./blend.js";
 import { detectAberrations } from "./aberrations.js";
 import {
   renderChart,
@@ -237,11 +243,12 @@ function renderCharts(forecast: ForecastData): void {
  * so HRRR will typically have the most recent init_time.
  */
 async function fetchLatestAnyInitTime(): Promise<string> {
-  const [gefsInit, hrrrInit] = await Promise.all([
+  const [gefsInit, hrrrInit, ecmwfInit] = await Promise.all([
     fetchLatestInitTime(),
     fetchLatestHrrrInitTime().catch(() => ""),
+    fetchLatestEcmwfInitTime().catch(() => ""),
   ]);
-  return hrrrInit > gefsInit ? hrrrInit : gefsInit;
+  return [gefsInit, hrrrInit, ecmwfInit].reduce((a, b) => (b > a ? b : a));
 }
 
 async function checkForNewerForecast(location: LatLon, cachedInitTime: string): Promise<void> {
@@ -252,12 +259,13 @@ async function checkForNewerForecast(location: LatLon, cachedInitTime: string): 
     // Newer forecast available — show updating indicator and refetch
     updatingIndicator.classList.remove("hidden");
 
-    const [gefsForecast, hrrrForecast, recentWeather] = await Promise.all([
+    const [gefsForecast, hrrrForecast, ecmwfForecast, recentWeather] = await Promise.all([
       fetchGefsForecast(location),
       fetchHrrrForecast(location),
+      fetchEcmwfForecast(location),
       fetchRecentWeather(location),
     ]);
-    const modelForecasts = [gefsForecast];
+    const modelForecasts = [gefsForecast, ecmwfForecast];
     if (hrrrForecast) modelForecasts.push(hrrrForecast);
     const forecast = blendForecasts(modelForecasts, loadAccuracyGrid());
     setCache(location.latitude, location.longitude, forecast, recentWeather);
@@ -325,16 +333,20 @@ async function loadForecast(location: LatLon): Promise<void> {
     // No cache — show skeleton charts and progressively load data
     showSkeletonCharts();
 
-    // Fetch metadata for both models in parallel, plus recent weather
-    const [gefsMeta, hrrrMeta] = await Promise.all([
+    // Fetch metadata for all models in parallel
+    const [gefsMeta, hrrrMeta, ecmwfMeta] = await Promise.all([
       fetchGefsMetadata(location),
       fetchHrrrMetadata(location),
+      fetchEcmwfMetadata(location),
     ]);
 
     // Show init time as soon as metadata is available
-    const gefsInitIso = gefsMeta.initTime.toISOString();
-    const hrrrInitIso = hrrrMeta?.initTime.toISOString() ?? "";
-    const latestInitTime = hrrrInitIso > gefsInitIso ? hrrrInitIso : gefsInitIso;
+    const initTimes = [
+      gefsMeta.initTime.toISOString(),
+      hrrrMeta?.initTime.toISOString() ?? "",
+      ecmwfMeta.initTime.toISOString(),
+    ];
+    const latestInitTime = initTimes.reduce((a, b) => (b > a ? b : a));
     initTimeLabel.textContent = formatInitTime(latestInitTime);
 
     // Kick off all variable fetches + recent weather in parallel
@@ -348,12 +360,21 @@ async function loadForecast(location: LatLon): Promise<void> {
     const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
 
     const variablePromises = variables.map(async (variable) => {
-      const [gefsPoints, hrrrPoints] = await Promise.all([
+      const [gefsPoints, hrrrPoints, ecmwfPoints] = await Promise.all([
         fetchGefsVariable(gefsMeta, variable),
         hrrrMeta ? fetchHrrrVariable(hrrrMeta, variable) : Promise.resolve(null),
+        fetchEcmwfVariable(ecmwfMeta, variable),
       ]);
 
-      const blended = blendSingleVariable(variable, gefsPoints, hrrrPoints, location, grid);
+      const inputs: ModelVariableInput[] = [
+        { model: "NOAA GEFS", points: gefsPoints, isEnsemble: true },
+        { model: "ECMWF IFS ENS", points: ecmwfPoints, isEnsemble: true },
+      ];
+      if (hrrrPoints) {
+        inputs.push({ model: "NOAA HRRR", points: hrrrPoints, isEnsemble: false });
+      }
+
+      const blended = blendSingleVariable(variable, inputs, location, grid);
       results[variable] = blended;
 
       // Animate skeleton out, then render real chart

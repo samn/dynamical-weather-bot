@@ -76,7 +76,7 @@ function avg(arr: number[]): number {
  * Read a coordinate array as numbers.
  * Handles both Int64 (BigInt64Array) and Float64 typed arrays.
  */
-function coordToNumbers(data: unknown): number[] {
+export function coordToNumbers(data: unknown): number[] {
   if (data instanceof BigInt64Array) {
     return Array.from(data, (v) => Number(v));
   }
@@ -206,7 +206,7 @@ async function getAnalysisTimeRange(
 }
 
 /** Convert ensemble values at each time step into ForecastPoints */
-function toForecastPoints(
+export function toForecastPoints(
   ensembleData: number[][],
   leadTimeHours: number[],
   initTime: Date,
@@ -349,6 +349,7 @@ export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast
   ]);
   return {
     model: "NOAA GEFS",
+    isEnsemble: true,
     location,
     initTime: meta.initTime.toISOString(),
     temperature,
