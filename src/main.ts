@@ -442,6 +442,8 @@ async function loadForecast(location: LatLon): Promise<void> {
       const aberrations = detectAberrations(cached.forecast, cached.recentWeather, getUnitSystem());
       renderAberrations(aberrations);
       showForecast();
+      modelControlsEl.classList.remove("hidden");
+      syncModelControls();
       renderCharts(cached.forecast);
       checkForNewerForecast(location, cached.forecast.initTime, true);
       return;
