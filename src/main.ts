@@ -331,13 +331,19 @@ async function fetchLatestAnyInitTime(): Promise<string> {
   return [gefsInit, hrrrInit, ecmwfInit].reduce((a, b) => (b > a ? b : a));
 }
 
-async function checkForNewerForecast(location: LatLon, knownInitTime: string): Promise<void> {
+async function checkForNewerForecast(
+  location: LatLon,
+  knownInitTime: string,
+  forceRefetch = false,
+): Promise<void> {
   try {
     const latestInitTime = await fetchLatestAnyInitTime();
-    if (latestInitTime <= knownInitTime) return;
+    const isNewer = latestInitTime > knownInitTime;
+    if (!forceRefetch && !isNewer) return;
 
-    // Newer forecast available — show updating indicator and refetch
-    updatingIndicator.classList.remove("hidden");
+    if (isNewer) {
+      updatingIndicator.classList.remove("hidden");
+    }
 
     const [gefsForecast, hrrrForecast, ecmwfForecast, recentWeather] = await Promise.all([
       fetchGefsForecast(location),
@@ -376,8 +382,11 @@ async function checkForNewerForecast(location: LatLon, knownInitTime: string): P
     cachedInitTime = latestInit;
     lastRecentWeather = recentWeather;
 
-    initTimeLabel.textContent = formatInitTime(latestInit);
-    updatingIndicator.classList.add("hidden");
+    if (isNewer) {
+      initTimeLabel.textContent = formatInitTime(latestInit);
+      updatingIndicator.classList.add("hidden");
+    }
+    modelControlsEl.classList.remove("hidden");
     syncModelControls();
     reblendAndRender();
 
@@ -433,10 +442,8 @@ async function loadForecast(location: LatLon): Promise<void> {
       const aberrations = detectAberrations(cached.forecast, cached.recentWeather, getUnitSystem());
       renderAberrations(aberrations);
       showForecast();
-      modelControlsEl.classList.remove("hidden");
-      syncModelControls();
       renderCharts(cached.forecast);
-      checkForNewerForecast(location, cached.forecast.initTime);
+      checkForNewerForecast(location, cached.forecast.initTime, true);
       return;
     }
 
