@@ -112,6 +112,16 @@ When multiple models are available, their outputs are blended per-variable, per-
 - Wind speed → `temperature_2m` (proxy)
 - Cloud cover → `temperature_2m` (proxy)
 
+### Model Selection UI
+- Users can toggle individual models (GEFS, HRRR, ECMWF) on/off via checkboxes
+- Users can switch between "Magic Blend" (accuracy-weighted) and "Equal Blend" (equal weights)
+- Per-model data is cached so toggling reblends instantly without refetching
+- Controls take effect incrementally during initial load — toggling a model or blend mode immediately re-renders any charts whose data has already loaded, even while other variables are still fetching
+- HRRR checkbox is auto-disabled outside CONUS
+- At least one ensemble model (GEFS or ECMWF) must remain enabled
+- Blend toggle is disabled when only one model is selected
+- Selection persisted in `localStorage` under keys `"enabled-models"` and `"magic-blend"`
+
 ---
 
 ## Recent Weather
@@ -302,6 +312,7 @@ main
   error: red-bordered message
   forecast:
     forecast-meta: init time label + "Updating forecast..." indicator
+    model-controls: [GEFS] [HRRR] [ECMWF] checkboxes + [Magic Blend] [Equal Blend] toggle
     aberrations: list of alert cards (icon + message, colored left border)
     charts: 4 chart containers, each with:
       chart-header: variable name + legend (━ median ▓ p10-p90 ░ min-max)
@@ -318,6 +329,7 @@ footer
 - Dark theme: `#0f1117` background, `#1a1d27` surface cards
 - Max width: 960px, centered
 - Responsive breakpoint at 600px (tighter spacing, smaller fonts, shorter canvases)
+- Model controls: flex row on desktop (checkboxes left, blend toggle right), stacked vertically on mobile
 - Aberration card colors: warm=orange, cool=light blue, rain=blue, danger=red (left border)
 - Chart containers: dark surface with subtle border, 8px border radius
 - Font: system-ui stack

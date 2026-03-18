@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getCached, setCache } from "./cache.js";
-import type { ForecastData, RecentWeather } from "./types.js";
+import type { ModelVariableInput } from "./blend.js";
+import type { ForecastData, ForecastVariable, RecentWeather } from "./types.js";
 
 const mockForecast: ForecastData = {
   location: { latitude: 40, longitude: -74 },
@@ -206,5 +207,42 @@ describe("setCache / getCached", () => {
     // Should not throw, should just create a fresh cache
     expect(() => setCache(40, -74, mockForecast, mockRecent)).not.toThrow();
     expect(getCached(40, -74)).not.toBeNull();
+  });
+
+  it("stores and retrieves per-model inputs", () => {
+    const points = [
+      {
+        time: "2026-03-07T00:00:00Z",
+        hoursFromNow: 0,
+        median: 15,
+        p10: 13,
+        p90: 17,
+        min: 11,
+        max: 19,
+      },
+    ];
+    const modelInputs = new Map<ForecastVariable, ModelVariableInput[]>();
+    modelInputs.set("temperature", [
+      { model: "NOAA GEFS", points, isEnsemble: true },
+      { model: "ECMWF IFS ENS", points, isEnsemble: true },
+    ]);
+
+    setCache(40, -74, mockForecast, mockRecent, modelInputs, false);
+    const result = getCached(40, -74);
+
+    expect(result).not.toBeNull();
+    expect(result!.modelInputs).not.toBeNull();
+    expect(result!.modelInputs!.get("temperature")).toHaveLength(2);
+    expect(result!.modelInputs!.get("temperature")![0]!.model).toBe("NOAA GEFS");
+    expect(result!.hrrrAvailable).toBe(false);
+  });
+
+  it("returns null modelInputs for legacy cache entries without per-model data", () => {
+    setCache(40, -74, mockForecast, mockRecent);
+    const result = getCached(40, -74);
+
+    expect(result).not.toBeNull();
+    expect(result!.modelInputs).toBeNull();
+    expect(result!.hrrrAvailable).toBe(true);
   });
 });

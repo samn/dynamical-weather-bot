@@ -43,6 +43,26 @@
           <span id="init-time-label"></span>
           <span id="updating-indicator" class="hidden">Updating forecast&hellip;</span>
         </div>
+        <div id="model-controls" class="hidden">
+          <div id="model-checkboxes">
+            <label class="model-checkbox">
+              <input type="checkbox" id="model-gefs" checked />
+              <span>GEFS</span>
+            </label>
+            <label class="model-checkbox">
+              <input type="checkbox" id="model-hrrr" checked />
+              <span>HRRR</span>
+            </label>
+            <label class="model-checkbox">
+              <input type="checkbox" id="model-ecmwf" checked />
+              <span>ECMWF</span>
+            </label>
+          </div>
+          <div id="blend-toggle">
+            <button id="magic-blend-btn" type="button" class="blend-btn active">Magic Blend</button>
+            <button id="equal-blend-btn" type="button" class="blend-btn">Equal Blend</button>
+          </div>
+        </div>
         <section id="aberrations"></section>
         <section id="charts">
           <div class="chart-container">
