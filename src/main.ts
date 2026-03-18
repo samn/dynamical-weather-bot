@@ -622,11 +622,8 @@ function handleModelCheckboxChange(model: ModelId, checkbox: HTMLInputElement): 
   if (checkbox.checked) {
     enabled.add(model);
   } else {
-    // Prevent deselecting all models — must keep at least one ensemble model
-    const remaining = new Set(enabled);
-    remaining.delete(model);
-    const hasEnsemble = [...remaining].some((m) => m === "NOAA GEFS" || m === "ECMWF IFS ENS");
-    if (!hasEnsemble) {
+    // Prevent deselecting all models — must keep at least one
+    if (enabled.size <= 1) {
       checkbox.checked = true;
       return;
     }
