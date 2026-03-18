@@ -256,9 +256,11 @@ function renderCharts(forecast: ForecastData): void {
   }
 }
 
-/** Filter cached inputs by enabled models and reblend */
+/** Filter cached inputs by enabled models and reblend.
+ *  Works incrementally — renders whatever variables are available,
+ *  skipping aberrations if recent weather hasn't loaded yet. */
 function reblendAndRender(): void {
-  if (!cachedModelInputs || !cachedLocation || !cachedInitTime || !lastRecentWeather) return;
+  if (!cachedModelInputs || !cachedLocation || !cachedInitTime) return;
 
   const enabledModels = getEnabledModels();
   const useMagic = getMagicBlend();
@@ -284,9 +286,16 @@ function reblendAndRender(): void {
   };
 
   lastForecast = forecast;
-  const aberrations = detectAberrations(forecast, lastRecentWeather, getUnitSystem());
-  renderAberrations(aberrations);
-  renderCharts(forecast);
+  if (lastRecentWeather) {
+    const aberrations = detectAberrations(forecast, lastRecentWeather, getUnitSystem());
+    renderAberrations(aberrations);
+  }
+  // Only re-render charts that have data
+  for (const v of variables) {
+    if (forecast[v].length > 0) {
+      renderVariableChart(v, forecast[v]);
+    }
+  }
 }
 
 /** Sync model checkbox UI with state */
@@ -487,6 +496,12 @@ async function loadForecast(location: LatLon): Promise<void> {
     syncModelControls();
     modelControlsEl.classList.remove("hidden");
 
+    // Initialize cache state before variable fetches so controls work
+    // incrementally as each variable loads
+    cachedModelInputs = new Map<ForecastVariable, ModelVariableInput[]>();
+    cachedLocation = location;
+    cachedInitTime = latestInitTime;
+
     // Kick off all variable fetches + recent weather in parallel
     const grid = loadAccuracyGrid();
     const enabledModels = getEnabledModels();
@@ -498,7 +513,6 @@ async function loadForecast(location: LatLon): Promise<void> {
       "cloudCover",
     ];
     const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
-    const newCache = new Map<ForecastVariable, ModelVariableInput[]>();
 
     const variablePromises = variables.map(async (variable) => {
       const [gefsPoints, hrrrPoints, ecmwfPoints] = await Promise.all([
@@ -507,7 +521,8 @@ async function loadForecast(location: LatLon): Promise<void> {
         fetchEcmwfVariable(ecmwfMeta, variable),
       ]);
 
-      // Cache ALL model inputs
+      // Cache ALL model inputs — update incrementally so controls work
+      // on already-loaded variables while others are still fetching
       const allInputs: ModelVariableInput[] = [
         { model: "NOAA GEFS", points: gefsPoints, isEnsemble: true },
         { model: "ECMWF IFS ENS", points: ecmwfPoints, isEnsemble: true },
@@ -515,7 +530,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       if (hrrrPoints) {
         allInputs.push({ model: "NOAA HRRR", points: hrrrPoints, isEnsemble: false });
       }
-      newCache.set(variable, allInputs);
+      cachedModelInputs!.set(variable, allInputs);
 
       // Blend only enabled models for display
       const filtered = allInputs.filter((i) => enabledModels.has(i.model));
@@ -532,11 +547,6 @@ async function loadForecast(location: LatLon): Promise<void> {
     const recentWeatherPromise = fetchRecentWeather(location);
 
     const [recentWeather] = await Promise.all([recentWeatherPromise, ...variablePromises]);
-
-    // Store cached model inputs for reblending
-    cachedModelInputs = newCache;
-    cachedLocation = location;
-    cachedInitTime = latestInitTime;
 
     // Build complete ForecastData
     const forecast: ForecastData = {

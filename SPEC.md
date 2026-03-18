@@ -116,6 +116,7 @@ When multiple models are available, their outputs are blended per-variable, per-
 - Users can toggle individual models (GEFS, HRRR, ECMWF) on/off via checkboxes
 - Users can switch between "Magic Blend" (accuracy-weighted) and "Equal Blend" (equal weights)
 - Per-model data is cached so toggling reblends instantly without refetching
+- Controls take effect incrementally during initial load — toggling a model or blend mode immediately re-renders any charts whose data has already loaded, even while other variables are still fetching
 - HRRR checkbox is auto-disabled outside CONUS
 - At least one ensemble model (GEFS or ECMWF) must remain enabled
 - Blend toggle is disabled when only one model is selected
