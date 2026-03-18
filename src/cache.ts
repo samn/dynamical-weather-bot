@@ -1,12 +1,19 @@
-import type { ForecastData, RecentWeather } from "./types.js";
+import type { ForecastData, ForecastVariable, RecentWeather } from "./types.js";
+import type { ModelVariableInput } from "./blend.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const STORAGE_KEY = "weather-cache";
+
+/** Serializable per-model inputs keyed by forecast variable */
+type SerializedModelInputs = Record<string, ModelVariableInput[]>;
 
 interface CacheEntry {
   timestamp: number;
   forecast: ForecastData;
   recentWeather: RecentWeather;
+  /** Per-model inputs for each variable, enabling immediate reblending */
+  modelInputs?: SerializedModelInputs;
+  hrrrAvailable?: boolean;
 }
 
 interface CacheStore {
@@ -35,10 +42,14 @@ function writeStore(store: CacheStore): void {
   }
 }
 
-export function getCached(
-  lat: number,
-  lon: number,
-): { forecast: ForecastData; recentWeather: RecentWeather } | null {
+export interface CachedData {
+  forecast: ForecastData;
+  recentWeather: RecentWeather;
+  modelInputs: Map<ForecastVariable, ModelVariableInput[]> | null;
+  hrrrAvailable: boolean;
+}
+
+export function getCached(lat: number, lon: number): CachedData | null {
   const store = readStore();
   const key = locationKey(lat, lon);
   const entry = store[key];
@@ -48,7 +59,19 @@ export function getCached(
     writeStore(store);
     return null;
   }
-  return { forecast: entry.forecast, recentWeather: entry.recentWeather };
+  let modelInputs: Map<ForecastVariable, ModelVariableInput[]> | null = null;
+  if (entry.modelInputs) {
+    modelInputs = new Map<ForecastVariable, ModelVariableInput[]>();
+    for (const [varKey, inputs] of Object.entries(entry.modelInputs)) {
+      modelInputs.set(varKey as ForecastVariable, inputs);
+    }
+  }
+  return {
+    forecast: entry.forecast,
+    recentWeather: entry.recentWeather,
+    modelInputs,
+    hrrrAvailable: entry.hrrrAvailable ?? true,
+  };
 }
 
 export function setCache(
@@ -56,6 +79,8 @@ export function setCache(
   lon: number,
   forecast: ForecastData,
   recentWeather: RecentWeather,
+  modelInputs?: Map<ForecastVariable, ModelVariableInput[]>,
+  hrrrAvailable?: boolean,
 ): void {
   const store = readStore();
   // Evict expired entries
@@ -65,6 +90,19 @@ export function setCache(
       delete store[key];
     }
   }
-  store[locationKey(lat, lon)] = { timestamp: now, forecast, recentWeather };
+  let serializedInputs: SerializedModelInputs | undefined;
+  if (modelInputs) {
+    serializedInputs = {};
+    for (const [varKey, inputs] of modelInputs) {
+      serializedInputs[varKey] = inputs;
+    }
+  }
+  store[locationKey(lat, lon)] = {
+    timestamp: now,
+    forecast,
+    recentWeather,
+    modelInputs: serializedInputs,
+    hrrrAvailable,
+  };
   writeStore(store);
 }

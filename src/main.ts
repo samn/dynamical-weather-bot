@@ -390,9 +390,16 @@ async function checkForNewerForecast(
     syncModelControls();
     reblendAndRender();
 
-    // Cache the full blend for offline use
+    // Cache the full blend and per-model data for offline use
     if (lastForecast) {
-      setCache(location.latitude, location.longitude, lastForecast, recentWeather);
+      setCache(
+        location.latitude,
+        location.longitude,
+        lastForecast,
+        recentWeather,
+        cachedModelInputs ?? undefined,
+        hrrrAvailable,
+      );
     }
   } catch {
     // Background refresh failed — keep showing existing data
@@ -438,6 +445,13 @@ async function loadForecast(location: LatLon): Promise<void> {
       lastRecentWeather = cached.recentWeather;
       cachedLocation = location;
       cachedInitTime = cached.forecast.initTime;
+
+      // Restore per-model inputs so controls work immediately
+      if (cached.modelInputs) {
+        cachedModelInputs = cached.modelInputs;
+        hrrrAvailable = cached.hrrrAvailable;
+      }
+
       initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
       const aberrations = detectAberrations(cached.forecast, cached.recentWeather, getUnitSystem());
       renderAberrations(aberrations);
@@ -536,7 +550,14 @@ async function loadForecast(location: LatLon): Promise<void> {
 
     lastForecast = forecast;
     lastRecentWeather = recentWeather;
-    setCache(location.latitude, location.longitude, forecast, recentWeather);
+    setCache(
+      location.latitude,
+      location.longitude,
+      forecast,
+      recentWeather,
+      cachedModelInputs ?? undefined,
+      hrrrAvailable,
+    );
 
     // Aberrations render after all data is available
     const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
