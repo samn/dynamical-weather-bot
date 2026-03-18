@@ -109,7 +109,7 @@ let lastRecentWeather: import("./types.js").RecentWeather | null = null;
 let cachedModelInputs: Map<ForecastVariable, ModelVariableInput[]> | null = null;
 let cachedLocation: LatLon | null = null;
 let cachedInitTime: string | null = null;
-let hrrrAvailable = false;
+let hrrrAvailable = true;
 
 function setButtonsDisabled(disabled: boolean): void {
   geolocateBtn.disabled = disabled;
@@ -602,6 +602,7 @@ function switchUnits(system: UnitSystem): void {
 }
 
 syncUnitToggle();
+syncModelControls();
 metricBtn.addEventListener("click", () => switchUnits("metric"));
 imperialBtn.addEventListener("click", () => switchUnits("imperial"));
 
