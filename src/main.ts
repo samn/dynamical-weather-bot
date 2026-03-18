@@ -435,6 +435,10 @@ function showSkeletonCharts(): void {
 async function loadForecast(location: LatLon): Promise<void> {
   locationLabel.textContent = `${location.latitude.toFixed(2)}\u00B0N, ${location.longitude.toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
 
+  // Clear stale aberrations immediately on location switch
+  aberrationsEl.innerHTML = "";
+  lastRecentWeather = null;
+
   try {
     // Check cache first — if valid, render immediately without skeletons
     const cached = getCached(location.latitude, location.longitude);
