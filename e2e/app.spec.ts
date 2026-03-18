@@ -153,12 +153,20 @@ test.describe("page load and initial state", () => {
     await expect(page.locator("#forecast")).toHaveClass(/hidden/);
   });
 
-  test("unit toggle buttons are present with imperial active by default", async ({
+  test("unit toggle is hidden initially and shown after loading starts", async ({
     page,
   }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
 
+    // Unit toggle is hidden before any forecast load
+    await expect(page.locator("#unit-toggle")).toHaveClass(/hidden/);
+
+    // Trigger a load to reveal the toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#unit-toggle")).not.toHaveClass(/hidden/);
     await expect(page.locator("#metric-btn")).toBeVisible();
     await expect(page.locator("#imperial-btn")).toBeVisible();
     // Default is imperial (see units.ts: stored === "metric" ? "metric" : "imperial")
@@ -266,7 +274,13 @@ test.describe("ZIP code input", () => {
 test.describe("unit toggle", () => {
   test("clicking metric button activates it", async ({ page }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
+
+    // Trigger a load to reveal the unit toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#unit-toggle")).not.toHaveClass(/hidden/);
 
     await page.click("#metric-btn");
 
@@ -278,7 +292,13 @@ test.describe("unit toggle", () => {
     page,
   }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
+
+    // Trigger a load to reveal the unit toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#unit-toggle")).not.toHaveClass(/hidden/);
 
     await page.click("#metric-btn");
     await page.click("#imperial-btn");
@@ -289,14 +309,23 @@ test.describe("unit toggle", () => {
 
   test("unit preference persists across page reloads", async ({ page }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
+
+    // Trigger a load to reveal the unit toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#unit-toggle")).not.toHaveClass(/hidden/);
 
     // Switch to metric
     await page.click("#metric-btn");
     await expect(page.locator("#metric-btn")).toHaveClass(/active/);
 
-    // Reload the page
+    // Reload the page — trigger load again to reveal toggle
     await page.reload();
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#unit-toggle")).not.toHaveClass(/hidden/);
 
     // Metric should still be active
     await expect(page.locator("#metric-btn")).toHaveClass(/active/);
