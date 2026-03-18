@@ -232,10 +232,11 @@ export function blendSingleVariable(
   inputs: ModelVariableInput[],
   location: LatLon,
   grid: AccuracyGrid,
+  useAccuracy: boolean = true,
 ): ForecastPoint[] {
   if (inputs.length === 0) return [];
   if (inputs.length === 1) return inputs[0]!.points;
-  const accuracy = lookupAccuracy(location, grid);
+  const accuracy = useAccuracy ? lookupAccuracy(location, grid) : undefined;
   return blendVariable(varKey, inputs, accuracy, CLAMP_MIN[varKey]);
 }
 
