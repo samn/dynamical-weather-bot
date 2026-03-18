@@ -57,6 +57,7 @@ const forecastEl = document.getElementById("forecast") as HTMLDivElement;
 const aberrationsEl = document.getElementById("aberrations") as HTMLElement;
 const initTimeLabel = document.getElementById("init-time-label") as HTMLSpanElement;
 const updatingIndicator = document.getElementById("updating-indicator") as HTMLSpanElement;
+const unitToggle = document.getElementById("unit-toggle") as HTMLDivElement;
 const metricBtn = document.getElementById("metric-btn") as HTMLButtonElement;
 const imperialBtn = document.getElementById("imperial-btn") as HTMLButtonElement;
 const modelControlsEl = document.getElementById("model-controls") as HTMLDivElement;
@@ -122,6 +123,7 @@ function showLoading(): void {
   loadingEl.classList.remove("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.add("hidden");
+  unitToggle.classList.remove("hidden");
 }
 
 function showError(msg: string): void {
@@ -422,6 +424,7 @@ function showSkeletonCharts(): void {
   loadingEl.classList.add("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.remove("hidden");
+  unitToggle.classList.remove("hidden");
   aberrationsEl.innerHTML = "";
   initTimeLabel.textContent = "";
 
