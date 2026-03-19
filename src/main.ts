@@ -20,7 +20,12 @@ import {
   fetchLatestEcmwfInitTime,
 } from "./ecmwf.js";
 import type { ModelId } from "./types.js";
-import { blendSingleVariable, type ModelVariableInput } from "./blend.js";
+import {
+  blendSingleVariable,
+  computeWeights,
+  lookupAccuracy,
+  type ModelVariableInput,
+} from "./blend.js";
 import {
   getEnabledModels,
   setEnabledModels,
@@ -50,22 +55,29 @@ const geolocateBtn = document.getElementById("geolocate-btn") as HTMLButtonEleme
 const zipForm = document.getElementById("zip-form") as HTMLFormElement;
 const zipInput = document.getElementById("zip-input") as HTMLInputElement;
 const zipSubmitBtn = zipForm.querySelector("button[type=submit]") as HTMLButtonElement;
+const locationBar = document.getElementById("location-bar") as HTMLDivElement;
+const locationDisplay = document.getElementById("location-display") as HTMLDivElement;
+const locationResetBtn = document.getElementById("location-reset-btn") as HTMLButtonElement;
+const locationBackBtn = document.getElementById("location-back-btn") as HTMLButtonElement;
 const locationLabel = document.getElementById("location-label") as HTMLSpanElement;
+const forecastMetaBar = document.getElementById("forecast-meta-bar") as HTMLDivElement;
 const loadingEl = document.getElementById("loading") as HTMLDivElement;
 const errorEl = document.getElementById("error") as HTMLDivElement;
 const forecastEl = document.getElementById("forecast") as HTMLDivElement;
 const aberrationsEl = document.getElementById("aberrations") as HTMLElement;
 const initTimeLabel = document.getElementById("init-time-label") as HTMLSpanElement;
 const updatingIndicator = document.getElementById("updating-indicator") as HTMLSpanElement;
-const unitToggle = document.getElementById("unit-toggle") as HTMLDivElement;
-const metricBtn = document.getElementById("metric-btn") as HTMLButtonElement;
-const imperialBtn = document.getElementById("imperial-btn") as HTMLButtonElement;
+const metricBtn = document.getElementById("metric-btn") as HTMLSpanElement;
+const imperialBtn = document.getElementById("imperial-btn") as HTMLSpanElement;
 const modelControlsEl = document.getElementById("model-controls") as HTMLDivElement;
 const modelGefsCheckbox = document.getElementById("model-gefs") as HTMLInputElement;
 const modelHrrrCheckbox = document.getElementById("model-hrrr") as HTMLInputElement;
 const modelEcmwfCheckbox = document.getElementById("model-ecmwf") as HTMLInputElement;
 const magicBlendBtn = document.getElementById("magic-blend-btn") as HTMLButtonElement;
 const equalBlendBtn = document.getElementById("equal-blend-btn") as HTMLButtonElement;
+const infoToggle = document.getElementById("info-toggle") as HTMLAnchorElement;
+const infoPanel = document.getElementById("info-panel") as HTMLDivElement;
+const blendWeightsInfo = document.getElementById("blend-weights-info") as HTMLParagraphElement;
 
 /** Load bundled accuracy grid data, or return empty grid if not available */
 function loadAccuracyGrid(): AccuracyGrid {
@@ -112,10 +124,24 @@ let cachedLocation: LatLon | null = null;
 let cachedInitTime: string | null = null;
 let hrrrAvailable = true;
 
+/** Last selected zip code for display */
+let lastZip: string | null = null;
+
+/** Whether user has selected a location (even if forecast hasn't loaded yet) */
+let hasSelectedLocation = false;
+
 function setButtonsDisabled(disabled: boolean): void {
   geolocateBtn.disabled = disabled;
   zipSubmitBtn.disabled = disabled;
   zipInput.disabled = disabled;
+}
+
+/** Hide location selection, show location display */
+function showLocationDisplay(): void {
+  locationBar.classList.add("hidden");
+  locationDisplay.classList.remove("hidden");
+  locationResetBtn.classList.remove("hidden");
+  locationBackBtn.classList.add("hidden");
 }
 
 function showLoading(): void {
@@ -123,7 +149,7 @@ function showLoading(): void {
   loadingEl.classList.remove("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.add("hidden");
-  unitToggle.classList.remove("hidden");
+  forecastMetaBar.classList.remove("hidden");
 }
 
 function showError(msg: string): void {
@@ -400,6 +426,7 @@ async function checkForNewerForecast(
     modelControlsEl.classList.remove("hidden");
     syncModelControls();
     reblendAndRender();
+    updateBlendWeightsDisplay();
 
     // Cache the full blend and per-model data for offline use
     if (lastForecast) {
@@ -424,7 +451,7 @@ function showSkeletonCharts(): void {
   loadingEl.classList.add("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.remove("hidden");
-  unitToggle.classList.remove("hidden");
+  forecastMetaBar.classList.remove("hidden");
   aberrationsEl.innerHTML = "";
   initTimeLabel.textContent = "";
 
@@ -435,8 +462,45 @@ function showSkeletonCharts(): void {
   }
 }
 
+/** Update the location label text */
+function updateLocationLabel(location: LatLon): void {
+  const latStr = `${location.latitude.toFixed(2)}\u00B0${location.latitude >= 0 ? "N" : "S"}`;
+  const lonStr = `${Math.abs(location.longitude).toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
+
+  if (lastZip) {
+    locationLabel.textContent = `${lastZip} \u2014 ${latStr}, ${lonStr}`;
+  } else {
+    locationLabel.textContent = `${latStr}, ${lonStr}`;
+  }
+}
+
+/** Update blend weights display in the info panel */
+function updateBlendWeightsDisplay(): void {
+  if (!cachedLocation || !cachedModelInputs) {
+    blendWeightsInfo.textContent = "";
+    return;
+  }
+
+  const grid = loadAccuracyGrid();
+  const accuracy = lookupAccuracy(cachedLocation, grid);
+  const models: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS"];
+  if (hrrrAvailable) models.push("NOAA HRRR");
+
+  // Show weights for temperature at lead time 0 (representative)
+  const weights = computeWeights(models, "temperature_2m", 0, accuracy);
+
+  const parts: string[] = [];
+  for (const [model, weight] of weights) {
+    const shortName = model.replace("NOAA ", "").replace("ECMWF ", "");
+    parts.push(`${shortName}: ${(weight * 100).toFixed(0)}%`);
+  }
+  blendWeightsInfo.textContent = `Magic Blend weights (temperature, near-term): ${parts.join(", ")}`;
+}
+
 async function loadForecast(location: LatLon): Promise<void> {
-  locationLabel.textContent = `${location.latitude.toFixed(2)}\u00B0N, ${location.longitude.toFixed(2)}\u00B0${location.longitude >= 0 ? "E" : "W"}`;
+  hasSelectedLocation = true;
+  updateLocationLabel(location);
+  showLocationDisplay();
 
   // Clear stale aberrations immediately on location switch
   aberrationsEl.innerHTML = "";
@@ -475,6 +539,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       modelControlsEl.classList.remove("hidden");
       syncModelControls();
       renderCharts(cached.forecast);
+      updateBlendWeightsDisplay();
       checkForNewerForecast(location, cached.forecast.initTime, true);
       return;
     }
@@ -580,6 +645,7 @@ async function loadForecast(location: LatLon): Promise<void> {
     const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
     renderAberrations(aberrations);
     setButtonsDisabled(false);
+    updateBlendWeightsDisplay();
 
     checkForNewerForecast(location, forecast.initTime);
   } catch (err) {
@@ -605,9 +671,43 @@ function getZipFromUrl(): string | null {
   return params.get("zip");
 }
 
+// When location selection is shown and user had a previous location, show back button
+function showLocationSelectionWithBack(): void {
+  locationBar.classList.remove("hidden");
+  locationDisplay.classList.add("hidden");
+  // Show back button in location display so user can cancel
+  if (hasSelectedLocation) {
+    locationDisplay.classList.remove("hidden");
+    locationResetBtn.classList.add("hidden");
+    locationBackBtn.classList.remove("hidden");
+  }
+}
+
+// Location reset/back button handlers
+locationResetBtn.addEventListener("click", () => {
+  // Show location selection, hide forecast, show back button if there was data
+  forecastEl.classList.add("hidden");
+  forecastMetaBar.classList.add("hidden");
+  modelControlsEl.classList.add("hidden");
+  errorEl.classList.add("hidden");
+  loadingEl.classList.add("hidden");
+  showLocationSelectionWithBack();
+});
+
+locationBackBtn.addEventListener("click", () => {
+  // Go back to previously selected location's forecast
+  showLocationDisplay();
+  forecastMetaBar.classList.remove("hidden");
+  if (lastForecast) {
+    forecastEl.classList.remove("hidden");
+    modelControlsEl.classList.remove("hidden");
+  }
+});
+
 // Event handlers
 geolocateBtn.addEventListener("click", async () => {
   try {
+    lastZip = null;
     showLoading();
     setZipInUrl(null);
     const location = await getGeolocation();
@@ -622,6 +722,7 @@ zipForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const zip = zipInput.value.trim();
   try {
+    lastZip = zip;
     showLoading();
     const location = await zipToLatLon(zip);
     setZipInUrl(zip);
@@ -648,10 +749,21 @@ function switchUnits(system: UnitSystem): void {
   }
 }
 
+function toggleUnits(): void {
+  const current = getUnitSystem();
+  switchUnits(current === "imperial" ? "metric" : "imperial");
+}
+
 syncUnitToggle();
 syncModelControls();
-metricBtn.addEventListener("click", () => switchUnits("metric"));
-imperialBtn.addEventListener("click", () => switchUnits("imperial"));
+metricBtn.addEventListener("click", toggleUnits);
+imperialBtn.addEventListener("click", toggleUnits);
+
+// Info panel toggle
+infoToggle.addEventListener("click", (e) => {
+  e.preventDefault();
+  infoPanel.classList.toggle("hidden");
+});
 
 // Resize handler for charts
 let resizeTimer: ReturnType<typeof setTimeout>;
@@ -707,6 +819,7 @@ equalBlendBtn.addEventListener("click", () => {
 // On load: if a zip code is in the URL, use it automatically
 const initialZip = getZipFromUrl();
 if (initialZip) {
+  lastZip = initialZip;
   zipInput.value = initialZip;
   zipToLatLon(initialZip).then(
     (location) => loadForecast(location),

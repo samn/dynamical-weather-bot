@@ -24,11 +24,30 @@
           />
           <button type="submit">Go</button>
         </form>
+      </div>
+      <div id="location-display" class="hidden">
+        <button id="location-reset-btn" type="button" class="icon-btn" aria-label="Change location">
+          &#9678;
+        </button>
+        <button
+          id="location-back-btn"
+          type="button"
+          class="icon-btn hidden"
+          aria-label="Back to forecast"
+        >
+          &#8592;
+        </button>
         <span id="location-label"></span>
-        <div id="unit-toggle" class="hidden">
-          <button id="metric-btn" type="button" class="unit-btn">°C</button>
-          <button id="imperial-btn" type="button" class="unit-btn active">°F</button>
-        </div>
+      </div>
+      <div id="forecast-meta-bar" class="hidden">
+        <span id="init-time-label"></span>
+        <span id="updating-indicator" class="hidden">Updating forecast&hellip;</span>
+        <span class="meta-separator">&middot;</span>
+        <span id="unit-toggle">
+          <span id="metric-btn" class="unit-text" role="button" tabindex="0">&deg;C</span>
+          <span class="unit-slash">/</span>
+          <span id="imperial-btn" class="unit-text active" role="button" tabindex="0">&deg;F</span>
+        </span>
       </div>
     </header>
 
@@ -39,10 +58,6 @@
       </div>
       <div id="error" class="hidden"></div>
       <div id="forecast" class="hidden">
-        <div id="forecast-meta">
-          <span id="init-time-label"></span>
-          <span id="updating-indicator" class="hidden">Updating forecast&hellip;</span>
-        </div>
         <div id="model-controls" class="hidden">
           <div id="model-checkboxes">
             <label class="model-checkbox">
@@ -68,28 +83,28 @@
           <div class="chart-container">
             <div class="chart-header">
               <h2>Temperature</h2>
-              <span class="chart-legend">━ median ▓ p10-p90 ░ min-max</span>
+              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="temp-chart"></canvas>
           </div>
           <div class="chart-container">
             <div class="chart-header">
               <h2>Precipitation</h2>
-              <span class="chart-legend">━ median ▓ p10-p90 ░ min-max</span>
+              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="precip-chart"></canvas>
           </div>
           <div class="chart-container">
             <div class="chart-header">
               <h2>Wind Speed</h2>
-              <span class="chart-legend">━ median ▓ p10-p90 ░ min-max</span>
+              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="wind-chart"></canvas>
           </div>
           <div class="chart-container">
             <div class="chart-header">
               <h2>Cloud Cover</h2>
-              <span class="chart-legend">━ median ▓ p10-p90 ░ min-max</span>
+              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="cloud-chart"></canvas>
           </div>
@@ -103,6 +118,27 @@
         GEFS &middot; 31-member ensemble forecast &middot; NOAA HRRR &middot; 48-hour hourly
         forecast &middot; ECMWF IFS ENS &middot; 51-member ensemble forecast
       </p>
+      <p>
+        <a href="#" id="info-toggle">???</a>
+      </p>
+      <div id="info-panel" class="hidden">
+        <p>
+          This app shows a <strong>72-hour probabilistic weather forecast</strong> by blending three
+          numerical weather prediction models: NOAA GEFS (31-member global ensemble), NOAA HRRR
+          (high-resolution hourly), and ECMWF IFS ENS (51-member global ensemble). The shaded bands
+          on each chart show forecast uncertainty &mdash; the median line is the most likely
+          outcome, the darker band spans the 10th&ndash;90th percentile range, and the lighter band
+          shows the full min&ndash;max envelope.
+        </p>
+        <p>
+          <strong>Magic Blend</strong> weights each model by its recent accuracy at your location
+          (inverse-squared error), so better-performing models contribute more. Current weights are
+          shown below. All forecast data is sourced from
+          <a href="https://dynamical.org" target="_blank" rel="noopener">dynamical.org</a>'s open
+          Zarr stores.
+        </p>
+        <p id="blend-weights-info"></p>
+      </div>
     </footer>
 
     <script type="module" src="./main.ts"></script>
