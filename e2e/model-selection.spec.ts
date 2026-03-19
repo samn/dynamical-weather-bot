@@ -423,19 +423,19 @@ test.describe("model controls sticky behavior", () => {
 });
 
 test.describe("model controls mobile layout", () => {
-  test("forecast-meta is centered on mobile", async ({ page }) => {
+  test("forecast-meta-bar is centered on mobile", async ({ page }) => {
     await blockZarrRequests(page);
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto("/");
 
     await page.evaluate(() => {
-      document.getElementById("forecast")!.classList.remove("hidden");
+      document.getElementById("forecast-meta-bar")!.classList.remove("hidden");
       document.getElementById("init-time-label")!.textContent =
         "Forecast initialized Mar 18, 2:00 AM EDT";
     });
 
     const justifyContent = await page
-      .locator("#forecast-meta")
+      .locator("#forecast-meta-bar")
       .evaluate((el) => {
         return getComputedStyle(el).justifyContent;
       });

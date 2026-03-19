@@ -153,12 +153,20 @@ test.describe("page load and initial state", () => {
     await expect(page.locator("#forecast")).toHaveClass(/hidden/);
   });
 
-  test("unit toggle buttons are present with imperial active by default", async ({
+  test("forecast meta bar is hidden initially and shown after loading starts", async ({
     page,
   }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
 
+    // Forecast meta bar (with unit toggle) is hidden before any forecast load
+    await expect(page.locator("#forecast-meta-bar")).toHaveClass(/hidden/);
+
+    // Trigger a load to reveal the meta bar
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
     await expect(page.locator("#metric-btn")).toBeVisible();
     await expect(page.locator("#imperial-btn")).toBeVisible();
     // Default is imperial (see units.ts: stored === "metric" ? "metric" : "imperial")
@@ -181,7 +189,7 @@ test.describe("page load and initial state", () => {
     await page.goto("/");
 
     await expect(page.locator("footer")).toContainText("dynamical.org");
-    await expect(page.locator('footer a[href="https://dynamical.org"]')).toBeVisible();
+    await expect(page.locator('footer a[href="https://dynamical.org"]').first()).toBeVisible();
   });
 });
 
@@ -266,7 +274,13 @@ test.describe("ZIP code input", () => {
 test.describe("unit toggle", () => {
   test("clicking metric button activates it", async ({ page }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
+
+    // Trigger a load to reveal the unit toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     await page.click("#metric-btn");
 
@@ -278,7 +292,13 @@ test.describe("unit toggle", () => {
     page,
   }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
+
+    // Trigger a load to reveal the unit toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     await page.click("#metric-btn");
     await page.click("#imperial-btn");
@@ -289,14 +309,21 @@ test.describe("unit toggle", () => {
 
   test("unit preference persists across page reloads", async ({ page }) => {
     await blockZarrRequests(page);
+    await mockZipApi(page);
     await page.goto("/");
+
+    // Trigger a load to reveal the unit toggle
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     // Switch to metric
     await page.click("#metric-btn");
     await expect(page.locator("#metric-btn")).toHaveClass(/active/);
 
-    // Reload the page
+    // Reload the page — URL has ?zip=10001 so app auto-loads
     await page.reload();
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     // Metric should still be active
     await expect(page.locator("#metric-btn")).toHaveClass(/active/);
@@ -513,8 +540,159 @@ test.describe("accessibility", () => {
     await blockZarrRequests(page);
     await page.goto("/");
 
-    const dynamicalLink = page.locator('a[href="https://dynamical.org"]');
-    await expect(dynamicalLink).toHaveAttribute("target", "_blank");
-    await expect(dynamicalLink).toHaveAttribute("rel", /noopener/);
+    const dynamicalLinks = page.locator('a[href="https://dynamical.org"]');
+    const count = await dynamicalLinks.count();
+    expect(count).toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      await expect(dynamicalLinks.nth(i)).toHaveAttribute("target", "_blank");
+      await expect(dynamicalLinks.nth(i)).toHaveAttribute("rel", /noopener/);
+    }
+  });
+});
+
+test.describe("location display and reset", () => {
+  test("location bar is visible and location display is hidden initially", async ({
+    page,
+  }) => {
+    await blockZarrRequests(page);
+    await page.goto("/");
+
+    await expect(page.locator("#location-bar")).toBeVisible();
+    await expect(page.locator("#location-display")).toHaveClass(/hidden/);
+  });
+
+  test("location bar hides and location display shows after ZIP submit", async ({
+    page,
+  }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await page.goto("/");
+
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+
+    // Location bar should be hidden, location display should show
+    await expect(page.locator("#location-bar")).toHaveClass(/hidden/);
+    await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
+  });
+
+  test("location label shows ZIP code and coordinates after ZIP submit", async ({
+    page,
+  }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await page.goto("/");
+
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+
+    await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
+    const label = await page.locator("#location-label").textContent();
+    expect(label).toContain("10001");
+    expect(label).toMatch(/\d+\.\d+/);
+  });
+
+  test("globe reset button shows location selection with back button", async ({
+    page,
+  }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await page.goto("/");
+
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
+
+    // Click the globe reset button
+    await page.click("#location-reset-btn");
+
+    // Location bar should be visible again
+    await expect(page.locator("#location-bar")).not.toHaveClass(/hidden/);
+    // Back button should be visible (since there was a previous location)
+    await expect(page.locator("#location-back-btn")).toBeVisible();
+    // Globe reset button should be hidden
+    await expect(page.locator("#location-reset-btn")).toHaveClass(/hidden/);
+  });
+
+  test("back button restores previous forecast view", async ({ page }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await page.goto("/");
+
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
+
+    // Click reset then back
+    await page.click("#location-reset-btn");
+    await expect(page.locator("#location-back-btn")).toBeVisible();
+    await page.click("#location-back-btn");
+
+    // Should be back to showing location display
+    await expect(page.locator("#location-bar")).toHaveClass(/hidden/);
+    await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
+    await expect(page.locator("#location-reset-btn")).toBeVisible();
+  });
+});
+
+test.describe("unit toggle as text", () => {
+  test("unit toggle elements are spans with role=button", async ({ page }) => {
+    await blockZarrRequests(page);
+    await page.goto("/");
+
+    const metricBtn = page.locator("#metric-btn");
+    const imperialBtn = page.locator("#imperial-btn");
+    await expect(metricBtn).toHaveAttribute("role", "button");
+    await expect(imperialBtn).toHaveAttribute("role", "button");
+  });
+
+  test("clicking either unit text toggles between units", async ({ page }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await page.goto("/");
+
+    // Trigger a load to reveal the meta bar
+    await page.fill("#zip-input", "10001");
+    await page.click('#zip-form button[type="submit"]');
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
+
+    // Default is imperial
+    await expect(page.locator("#imperial-btn")).toHaveClass(/active/);
+
+    // Click either button to toggle to metric
+    await page.click("#metric-btn");
+    await expect(page.locator("#metric-btn")).toHaveClass(/active/);
+    await expect(page.locator("#imperial-btn")).not.toHaveClass(/active/);
+
+    // Click again to toggle back to imperial
+    await page.click("#imperial-btn");
+    await expect(page.locator("#imperial-btn")).toHaveClass(/active/);
+    await expect(page.locator("#metric-btn")).not.toHaveClass(/active/);
+  });
+});
+
+test.describe("info panel", () => {
+  test("info panel is hidden by default", async ({ page }) => {
+    await blockZarrRequests(page);
+    await page.goto("/");
+
+    await expect(page.locator("#info-panel")).toHaveClass(/hidden/);
+  });
+
+  test("clicking ??? link toggles info panel visibility", async ({ page }) => {
+    await blockZarrRequests(page);
+    await page.goto("/");
+
+    await page.click("#info-toggle");
+    await expect(page.locator("#info-panel")).not.toHaveClass(/hidden/);
+
+    // Contains expected content
+    await expect(page.locator("#info-panel")).toContainText("probabilistic weather forecast");
+    await expect(page.locator("#info-panel")).toContainText("Magic Blend");
+    await expect(page.locator("#info-panel")).toContainText("dynamical.org");
+
+    // Click again to hide
+    await page.click("#info-toggle");
+    await expect(page.locator("#info-panel")).toHaveClass(/hidden/);
   });
 });
