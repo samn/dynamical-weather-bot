@@ -34,7 +34,7 @@ const WINDOW_90D = 7776000000000000;
 const BOUNDS = { minLat: 24.0, maxLat: 50.0, minLon: -130.0, maxLon: -65.0 };
 
 /** Max radius in km for IDW interpolation */
-const MAX_RADIUS_KM = 250;
+const MAX_RADIUS_KM = 75;
 
 /** Minimum distance cap for IDW to avoid division issues */
 const MIN_DISTANCE_KM = 10;
