@@ -20,6 +20,7 @@ export default defineConfig({
         "src/geo.ts",
         "src/hrrr.ts",
         "src/ecmwf.ts",
+        "src/aifs.ts",
       ],
       thresholds: {
         statements: 90,

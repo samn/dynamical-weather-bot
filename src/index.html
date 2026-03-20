@@ -72,6 +72,10 @@
               <input type="checkbox" id="model-ecmwf" checked />
               <span>ECMWF</span>
             </label>
+            <label class="model-checkbox">
+              <input type="checkbox" id="model-aifs" checked />
+              <span>AIFS</span>
+            </label>
           </div>
           <div id="blend-toggle">
             <button id="magic-blend-btn" type="button" class="blend-btn active">Magic Blend</button>
@@ -116,19 +120,21 @@
       <p>
         Data: <a href="https://dynamical.org" target="_blank" rel="noopener">dynamical.org</a> NOAA
         GEFS &middot; 31-member ensemble forecast &middot; NOAA HRRR &middot; 48-hour hourly
-        forecast &middot; ECMWF IFS ENS &middot; 51-member ensemble forecast
+        forecast &middot; ECMWF IFS ENS &middot; 51-member ensemble forecast &middot; ECMWF AIFS
+        &middot; deterministic AI forecast
       </p>
       <p>
         <a href="#" id="info-toggle">???</a>
       </p>
       <div id="info-panel" class="hidden">
         <p>
-          This app shows a <strong>72-hour probabilistic weather forecast</strong> by blending three
-          numerical weather prediction models: NOAA GEFS (31-member global ensemble), NOAA HRRR
-          (high-resolution hourly), and ECMWF IFS ENS (51-member global ensemble). The shaded bands
-          on each chart show forecast uncertainty &mdash; the median line is the most likely
-          outcome, the darker band spans the 10th&ndash;90th percentile range, and the lighter band
-          shows the full min&ndash;max envelope.
+          This app shows a <strong>72-hour probabilistic weather forecast</strong> by blending four
+          weather prediction models: NOAA GEFS (31-member global ensemble), NOAA HRRR
+          (high-resolution hourly), ECMWF IFS ENS (51-member global ensemble), and ECMWF AIFS
+          (AI-based deterministic global). The shaded bands on each chart show forecast uncertainty
+          &mdash; the median line is the most likely outcome, the darker band spans the
+          10th&ndash;90th percentile range, and the lighter band shows the full min&ndash;max
+          envelope.
         </p>
         <p>
           <strong>Magic Blend</strong> weights each model by its recent accuracy at your location

@@ -92,7 +92,7 @@ async function main() {
   console.log(`Parsed ${rows.length} statistic rows`);
 
   // Filter to relevant rows
-  const models = new Set(["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS"]);
+  const models = new Set(["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]);
   const filtered = rows.filter((r) => {
     if (!models.has(r.model)) return false;
     const expectedMetric = VARIABLE_METRICS[r.variable];
