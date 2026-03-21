@@ -3,7 +3,7 @@ import type { ModelId } from "./types.js";
 const MODELS_KEY = "enabled-models";
 const BLEND_KEY = "magic-blend";
 
-const ALL_MODELS: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS"];
+const ALL_MODELS: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
 
 export function getEnabledModels(): Set<ModelId> {
   const stored = localStorage.getItem(MODELS_KEY);

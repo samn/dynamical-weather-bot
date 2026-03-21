@@ -177,9 +177,10 @@ test.describe("model selection controls", () => {
   test("cannot deselect the last remaining model", async ({ page }) => {
     await showModelControls(page);
 
-    // Uncheck two models
+    // Uncheck all but one model
     await page.locator("#model-gefs").uncheck();
     await page.locator("#model-ecmwf").uncheck();
+    await page.locator("#model-aifs").uncheck();
 
     // Try to uncheck the last one (HRRR) — should stay checked
     await page.locator("#model-hrrr").click();
@@ -227,6 +228,7 @@ test.describe("model selection controls", () => {
 
     await page.locator("#model-gefs").uncheck();
     await page.locator("#model-hrrr").uncheck();
+    await page.locator("#model-aifs").uncheck();
 
     // Only ECMWF remains — blend toggle should be disabled
     await expect(page.locator("#magic-blend-btn")).toBeDisabled();
@@ -241,6 +243,7 @@ test.describe("model selection controls", () => {
     // Get down to one model
     await page.locator("#model-gefs").uncheck();
     await page.locator("#model-hrrr").uncheck();
+    await page.locator("#model-aifs").uncheck();
     await expect(page.locator("#magic-blend-btn")).toBeDisabled();
 
     // Re-enable a second model

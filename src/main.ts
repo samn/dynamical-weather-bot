@@ -19,6 +19,12 @@ import {
   fetchEcmwfVariable,
   fetchLatestEcmwfInitTime,
 } from "./ecmwf.js";
+import {
+  fetchAifsForecast,
+  fetchAifsMetadata,
+  fetchAifsVariable,
+  fetchLatestAifsInitTime,
+} from "./aifs.js";
 import type { ModelId } from "./types.js";
 import {
   blendSingleVariable,
@@ -73,6 +79,7 @@ const modelControlsEl = document.getElementById("model-controls") as HTMLDivElem
 const modelGefsCheckbox = document.getElementById("model-gefs") as HTMLInputElement;
 const modelHrrrCheckbox = document.getElementById("model-hrrr") as HTMLInputElement;
 const modelEcmwfCheckbox = document.getElementById("model-ecmwf") as HTMLInputElement;
+const modelAifsCheckbox = document.getElementById("model-aifs") as HTMLInputElement;
 const magicBlendBtn = document.getElementById("magic-blend-btn") as HTMLButtonElement;
 const equalBlendBtn = document.getElementById("equal-blend-btn") as HTMLButtonElement;
 const infoToggle = document.getElementById("info-toggle") as HTMLAnchorElement;
@@ -332,6 +339,7 @@ function syncModelControls(): void {
   modelGefsCheckbox.checked = enabled.has("NOAA GEFS");
   modelHrrrCheckbox.checked = enabled.has("NOAA HRRR");
   modelEcmwfCheckbox.checked = enabled.has("ECMWF IFS ENS");
+  modelAifsCheckbox.checked = enabled.has("ECMWF AIFS");
 
   // HRRR availability
   const hrrrLabel = modelHrrrCheckbox.closest(".model-checkbox") as HTMLElement | null;
@@ -360,12 +368,13 @@ function syncModelControls(): void {
  * so HRRR will typically have the most recent init_time.
  */
 async function fetchLatestAnyInitTime(): Promise<string> {
-  const [gefsInit, hrrrInit, ecmwfInit] = await Promise.all([
+  const [gefsInit, hrrrInit, ecmwfInit, aifsInit] = await Promise.all([
     fetchLatestInitTime(),
     fetchLatestHrrrInitTime().catch(() => ""),
     fetchLatestEcmwfInitTime().catch(() => ""),
+    fetchLatestAifsInitTime().catch(() => ""),
   ]);
-  return [gefsInit, hrrrInit, ecmwfInit].reduce((a, b) => (b > a ? b : a));
+  return [gefsInit, hrrrInit, ecmwfInit, aifsInit].reduce((a, b) => (b > a ? b : a));
 }
 
 async function checkForNewerForecast(
@@ -382,16 +391,18 @@ async function checkForNewerForecast(
       updatingIndicator.classList.remove("hidden");
     }
 
-    const [gefsForecast, hrrrForecast, ecmwfForecast, recentWeather] = await Promise.all([
-      fetchGefsForecast(location),
-      fetchHrrrForecast(location),
-      fetchEcmwfForecast(location),
-      fetchRecentWeather(location),
-    ]);
+    const [gefsForecast, hrrrForecast, ecmwfForecast, aifsForecast, recentWeather] =
+      await Promise.all([
+        fetchGefsForecast(location),
+        fetchHrrrForecast(location),
+        fetchEcmwfForecast(location),
+        fetchAifsForecast(location),
+        fetchRecentWeather(location),
+      ]);
 
     // Update cached per-model inputs
     hrrrAvailable = hrrrForecast !== null;
-    const modelForecasts = [gefsForecast, ecmwfForecast];
+    const modelForecasts = [gefsForecast, ecmwfForecast, aifsForecast];
     if (hrrrForecast) modelForecasts.push(hrrrForecast);
 
     const variables: ForecastVariable[] = [
@@ -483,7 +494,7 @@ function updateBlendWeightsDisplay(): void {
 
   const grid = loadAccuracyGrid();
   const accuracy = lookupAccuracy(cachedLocation, grid);
-  const models: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS"];
+  const models: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
   if (hrrrAvailable) models.push("NOAA HRRR");
 
   // Show weights for temperature at lead time 0 (representative)
@@ -548,10 +559,11 @@ async function loadForecast(location: LatLon): Promise<void> {
     showSkeletonCharts();
 
     // Fetch metadata for all models in parallel
-    const [gefsMeta, hrrrMeta, ecmwfMeta] = await Promise.all([
+    const [gefsMeta, hrrrMeta, ecmwfMeta, aifsMeta] = await Promise.all([
       fetchGefsMetadata(location),
       fetchHrrrMetadata(location),
       fetchEcmwfMetadata(location),
+      fetchAifsMetadata(location),
     ]);
 
     // Show init time as soon as metadata is available
@@ -559,6 +571,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       gefsMeta.initTime.toISOString(),
       hrrrMeta?.initTime.toISOString() ?? "",
       ecmwfMeta.initTime.toISOString(),
+      aifsMeta.initTime.toISOString(),
     ];
     const latestInitTime = initTimes.reduce((a, b) => (b > a ? b : a));
     initTimeLabel.textContent = formatInitTime(latestInitTime);
@@ -587,10 +600,11 @@ async function loadForecast(location: LatLon): Promise<void> {
     const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
 
     const variablePromises = variables.map(async (variable) => {
-      const [gefsPoints, hrrrPoints, ecmwfPoints] = await Promise.all([
+      const [gefsPoints, hrrrPoints, ecmwfPoints, aifsPoints] = await Promise.all([
         fetchGefsVariable(gefsMeta, variable),
         hrrrMeta ? fetchHrrrVariable(hrrrMeta, variable) : Promise.resolve(null),
         fetchEcmwfVariable(ecmwfMeta, variable),
+        fetchAifsVariable(aifsMeta, variable),
       ]);
 
       // Cache ALL model inputs — update incrementally so controls work
@@ -598,6 +612,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       const allInputs: ModelVariableInput[] = [
         { model: "NOAA GEFS", points: gefsPoints, isEnsemble: true },
         { model: "ECMWF IFS ENS", points: ecmwfPoints, isEnsemble: true },
+        { model: "ECMWF AIFS", points: aifsPoints, isEnsemble: false },
       ];
       if (hrrrPoints) {
         allInputs.push({ model: "NOAA HRRR", points: hrrrPoints, isEnsemble: false });
@@ -802,6 +817,9 @@ modelHrrrCheckbox.addEventListener("change", () =>
 );
 modelEcmwfCheckbox.addEventListener("change", () =>
   handleModelCheckboxChange("ECMWF IFS ENS", modelEcmwfCheckbox),
+);
+modelAifsCheckbox.addEventListener("change", () =>
+  handleModelCheckboxChange("ECMWF AIFS", modelAifsCheckbox),
 );
 
 magicBlendBtn.addEventListener("click", () => {

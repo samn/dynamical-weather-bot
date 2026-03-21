@@ -50,7 +50,7 @@ export interface RecentWeather {
 }
 
 /** Supported forecast model identifiers */
-export type ModelId = "NOAA GEFS" | "NOAA HRRR" | "ECMWF IFS ENS";
+export type ModelId = "NOAA GEFS" | "NOAA HRRR" | "ECMWF IFS ENS" | "ECMWF AIFS";
 
 /** Forecast output from a single model */
 export interface ModelForecast {
