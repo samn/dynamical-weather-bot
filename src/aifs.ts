@@ -10,7 +10,7 @@ import {
 } from "./weather.js";
 
 const AIFS_STORE_URL =
-  "https://data.dynamical.org/ecmwf/aifs-deterministic/forecast/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
+  "https://data.dynamical.org/ecmwf/aifs-single/forecast/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
 
 /** Number of 6-hourly steps to cover 72 hours */
 const STEPS_72H = 12;
