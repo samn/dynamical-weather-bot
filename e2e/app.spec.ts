@@ -91,9 +91,12 @@ async function injectMockWeatherData(page: Page) {
   );
 }
 
-/** Block all requests to dynamical.org (Zarr stores) to prevent real fetches */
+/** Block all requests to data stores (Icechunk S3 + legacy Zarr) to prevent real fetches */
 async function blockZarrRequests(page: Page) {
   await page.route("**/data.dynamical.org/**", (route) =>
+    route.abort("blockedbyclient"),
+  );
+  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
     route.abort("blockedbyclient"),
   );
 }
