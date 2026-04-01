@@ -1,4 +1,5 @@
 import * as zarr from "zarrita";
+import { IcechunkStore } from "icechunk-js";
 import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
 import {
   latToIndex,
@@ -11,7 +12,17 @@ import {
 } from "./weather.js";
 
 const ECMWF_STORE_URL =
-  "https://data.dynamical.org/ecmwf/ifs-ens/forecast-15-day-0-25-degree/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
+  "https://dynamical-ecmwf-ifs-ens.s3.us-west-2.amazonaws.com/ecmwf-ifs-ens-forecast-15-day-0-25-degree/v0.1.0.icechunk/";
+
+/** Cached IcechunkStore instance */
+let storePromise: Promise<IcechunkStore> | null = null;
+
+function getStore(): Promise<IcechunkStore> {
+  if (!storePromise) {
+    storePromise = IcechunkStore.open(ECMWF_STORE_URL);
+  }
+  return storePromise;
+}
 
 /** Number of 3-hourly steps to cover 72 hours */
 const STEPS_72H = 24;
@@ -21,9 +32,8 @@ const NUM_ENSEMBLE = 51;
 
 /** Fetch just the latest ECMWF forecast init time (lightweight metadata check) */
 export async function fetchLatestEcmwfInitTime(): Promise<string> {
-  const store = new zarr.FetchStore(ECMWF_STORE_URL);
-  const loc = zarr.root(store).resolve("init_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+  const store = await getStore();
+  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const lastSec = data[data.length - 1] ?? 0;
@@ -32,7 +42,7 @@ export async function fetchLatestEcmwfInitTime(): Promise<string> {
 
 /** Metadata needed to fetch individual ECMWF variables */
 export interface EcmwfMetadata {
-  store: zarr.FetchStore;
+  store: IcechunkStore;
   initIdx: number;
   initTime: Date;
   leadTimeHours: number[];
@@ -45,7 +55,7 @@ export interface EcmwfMetadata {
 export async function fetchEcmwfMetadata(location: LatLon): Promise<EcmwfMetadata> {
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
-  const store = new zarr.FetchStore(ECMWF_STORE_URL);
+  const store = await getStore();
 
   const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
     getLatestInitTimeIndex(store),
@@ -56,10 +66,9 @@ export async function fetchEcmwfMetadata(location: LatLon): Promise<EcmwfMetadat
 }
 
 async function getLatestInitTimeIndex(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
 ): Promise<{ index: number; initTime: Date }> {
-  const loc = zarr.root(store).resolve("init_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const lastIdx = data.length - 1;
@@ -67,9 +76,8 @@ async function getLatestInitTimeIndex(
   return { index: lastIdx, initTime: new Date(secValue * 1000) };
 }
 
-async function getLeadTimeHours(store: zarr.FetchStore, numSteps: number): Promise<number[]> {
-  const loc = zarr.root(store).resolve("lead_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
+  const arr = await zarr.open(store.resolve("lead_time"), { kind: "array" });
   const result = await zarr.get(arr, [zarr.slice(numSteps)]);
   const data = coordToNumbers(result.data);
   return data.map((s) => s / 3600);
@@ -83,7 +91,7 @@ async function getLeadTimeHours(store: zarr.FetchStore, numSteps: number): Promi
  * Note: lead_time and ensemble_member are swapped compared to GEFS.
  */
 async function fetchForecastVariable(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
   varName: string,
   initTimeIdx: number,
   latIdx: number,
@@ -91,8 +99,7 @@ async function fetchForecastVariable(
   numEnsembleMembers: number,
   numSteps: number,
 ): Promise<number[][]> {
-  const loc = zarr.root(store).resolve(varName);
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve(varName), { kind: "array" });
 
   // ECMWF: (init_time, lead_time, ensemble_member, latitude, longitude)
   const result = await zarr.get(arr, [

@@ -1,19 +1,29 @@
 import * as zarr from "zarrita";
+import { IcechunkStore } from "icechunk-js";
 import proj4 from "proj4";
 import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
 import { windSpeed, precipToMmHr, cloudCoverToFraction } from "./weather.js";
 
 const HRRR_STORE_URL =
-  "https://data.dynamical.org/noaa/hrrr/forecast-48-hour/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
+  "https://dynamical-noaa-hrrr.s3.us-west-2.amazonaws.com/noaa-hrrr-forecast-48-hour/v0.1.0.icechunk/";
+
+/** Cached IcechunkStore instance */
+let storePromise: Promise<IcechunkStore> | null = null;
+
+function getStore(): Promise<IcechunkStore> {
+  if (!storePromise) {
+    storePromise = IcechunkStore.open(HRRR_STORE_URL);
+  }
+  return storePromise;
+}
 
 /** Maximum number of hourly steps in HRRR 48-hour forecast */
 const MAX_STEPS = 48;
 
 /** Fetch just the latest HRRR forecast init time (lightweight metadata check) */
 export async function fetchLatestHrrrInitTime(): Promise<string> {
-  const store = new zarr.FetchStore(HRRR_STORE_URL);
-  const root = zarr.root(store);
-  const arr = await zarr.open(root.resolve("init_time"), { kind: "array" });
+  const store = await getStore();
+  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const lastSec = data[data.length - 1] ?? 0;
@@ -80,7 +90,7 @@ function coordToNumbers(data: unknown): number[] {
 
 /** Metadata needed to fetch individual HRRR variables */
 export interface HrrrMetadata {
-  root: zarr.Location<zarr.FetchStore>;
+  store: IcechunkStore;
   initTimeIdx: number;
   initTime: Date;
   leadTimeHours: number[];
@@ -91,14 +101,13 @@ export interface HrrrMetadata {
 
 /** Fetch HRRR metadata. Returns null if location is outside CONUS. */
 export async function fetchHrrrMetadata(location: LatLon): Promise<HrrrMetadata | null> {
-  const store = new zarr.FetchStore(HRRR_STORE_URL);
-  const storeRoot = zarr.root(store);
+  const store = await getStore();
 
   const [xResult, yResult, initTimeResult, leadTimeResult] = await Promise.all([
-    zarr.get(await zarr.open(storeRoot.resolve("x"), { kind: "array" })),
-    zarr.get(await zarr.open(storeRoot.resolve("y"), { kind: "array" })),
-    zarr.get(await zarr.open(storeRoot.resolve("init_time"), { kind: "array" })),
-    zarr.get(await zarr.open(storeRoot.resolve("lead_time"), { kind: "array" })),
+    zarr.get(await zarr.open(store.resolve("x"), { kind: "array" })),
+    zarr.get(await zarr.open(store.resolve("y"), { kind: "array" })),
+    zarr.get(await zarr.open(store.resolve("init_time"), { kind: "array" })),
+    zarr.get(await zarr.open(store.resolve("lead_time"), { kind: "array" })),
   ]);
 
   const xCoords = coordToNumbers(xResult.data);
@@ -117,7 +126,7 @@ export async function fetchHrrrMetadata(location: LatLon): Promise<HrrrMetadata 
   const leadTimeHours = leadTimesRaw.slice(0, numSteps).map((s) => s / 3600);
 
   return {
-    root: storeRoot,
+    store,
     initTimeIdx,
     initTime,
     leadTimeHours,
@@ -147,8 +156,7 @@ function toPoints(values: number[], leadTimeHours: number[], initTime: Date): Fo
 
 /** Fetch a single variable from the HRRR store */
 async function fetchHrrrVar(meta: HrrrMetadata, varName: string): Promise<number[]> {
-  const loc = meta.root.resolve(varName);
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(meta.store.resolve(varName), { kind: "array" });
   const result = await zarr.get(arr, [
     meta.initTimeIdx,
     zarr.slice(meta.numSteps),

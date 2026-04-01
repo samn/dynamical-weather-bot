@@ -11,9 +11,12 @@ async function showModelControls(page: Page) {
   });
 }
 
-/** Block all Zarr store requests */
+/** Block all data store requests (Icechunk S3 + legacy Zarr) */
 async function blockZarrRequests(page: Page) {
   await page.route("**/data.dynamical.org/**", (route) =>
+    route.abort("blockedbyclient"),
+  );
+  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
     route.abort("blockedbyclient"),
   );
 }

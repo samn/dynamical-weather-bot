@@ -1,4 +1,5 @@
 import * as zarr from "zarrita";
+import { IcechunkStore } from "icechunk-js";
 import type {
   LatLon,
   ForecastPoint,
@@ -9,10 +10,28 @@ import type {
 import { normalizeLongitude } from "./geo.js";
 
 const FORECAST_STORE_URL =
-  "https://data.dynamical.org/noaa/gefs/forecast-35-day/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
+  "https://dynamical-noaa-gefs.s3.us-west-2.amazonaws.com/noaa-gefs-forecast-35-day/v0.2.0.icechunk/";
 
 const ANALYSIS_STORE_URL =
-  "https://data.dynamical.org/noaa/gefs/analysis/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
+  "https://dynamical-noaa-gefs.s3.us-west-2.amazonaws.com/noaa-gefs-analysis/v0.1.2.icechunk/";
+
+/** Cached IcechunkStore instances (opened once, reused across requests) */
+let forecastStorePromise: Promise<IcechunkStore> | null = null;
+let analysisStorePromise: Promise<IcechunkStore> | null = null;
+
+function getForecastStore(): Promise<IcechunkStore> {
+  if (!forecastStorePromise) {
+    forecastStorePromise = IcechunkStore.open(FORECAST_STORE_URL);
+  }
+  return forecastStorePromise;
+}
+
+function getAnalysisStore(): Promise<IcechunkStore> {
+  if (!analysisStorePromise) {
+    analysisStorePromise = IcechunkStore.open(ANALYSIS_STORE_URL);
+  }
+  return analysisStorePromise;
+}
 
 /** Number of 3-hourly steps to cover 72 hours */
 const STEPS_72H = 24; // 72 / 3
@@ -96,7 +115,7 @@ export function coordToNumbers(data: unknown): number[] {
  * Dimensions: (init_time, ensemble_member, lead_time, latitude, longitude)
  */
 async function fetchForecastVariable(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
   varName: string,
   initTimeIdx: number,
   latIdx: number,
@@ -104,8 +123,7 @@ async function fetchForecastVariable(
   numEnsembleMembers: number,
   numSteps: number,
 ): Promise<number[][]> {
-  const loc = zarr.root(store).resolve(varName);
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve(varName), { kind: "array" });
 
   // Fetch: specific init_time, all ensemble members, first numSteps lead times, specific lat/lon
   const result = await zarr.get(arr, [
@@ -134,15 +152,14 @@ async function fetchForecastVariable(
  * Analysis dimensions: (time, latitude, longitude)
  */
 async function fetchAnalysisVariable(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
   varName: string,
   latIdx: number,
   lonIdx: number,
   startTimeIdx: number,
   numSteps: number,
 ): Promise<number[]> {
-  const loc = zarr.root(store).resolve(varName);
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve(varName), { kind: "array" });
 
   const result = await zarr.get(arr, [
     zarr.slice(startTimeIdx, startTimeIdx + numSteps),
@@ -158,10 +175,9 @@ async function fetchAnalysisVariable(
  * init_time is stored as int64 seconds since epoch.
  */
 async function getLatestInitTimeIndex(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
 ): Promise<{ index: number; initTime: Date }> {
-  const loc = zarr.root(store).resolve("init_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const lastIdx = data.length - 1;
@@ -174,9 +190,8 @@ async function getLatestInitTimeIndex(
  * Get the lead_time values (as hours from init_time).
  * lead_time is stored as int64 seconds.
  */
-async function getLeadTimeHours(store: zarr.FetchStore, numSteps: number): Promise<number[]> {
-  const loc = zarr.root(store).resolve("lead_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
+  const arr = await zarr.open(store.resolve("lead_time"), { kind: "array" });
   const result = await zarr.get(arr, [zarr.slice(numSteps)]);
   const data = coordToNumbers(result.data);
   // Seconds -> hours
@@ -188,11 +203,10 @@ async function getLeadTimeHours(store: zarr.FetchStore, numSteps: number): Promi
  * Returns { startIdx, numSteps } for the last N days of analysis data.
  */
 async function getAnalysisTimeRange(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
   daysBack: number,
 ): Promise<{ startIdx: number; numSteps: number }> {
-  const loc = zarr.root(store).resolve("time");
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve("time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const totalSteps = data.length;
@@ -244,14 +258,14 @@ export function toForecastPoints(
 
 /** Fetch just the latest GEFS forecast init time (lightweight metadata check) */
 export async function fetchLatestInitTime(): Promise<string> {
-  const store = new zarr.FetchStore(FORECAST_STORE_URL);
+  const store = await getForecastStore();
   const { initTime } = await getLatestInitTimeIndex(store);
   return initTime.toISOString();
 }
 
 /** Metadata needed to fetch individual GEFS variables */
 export interface GefsMetadata {
-  store: zarr.FetchStore;
+  store: IcechunkStore;
   initIdx: number;
   initTime: Date;
   leadTimeHours: number[];
@@ -264,7 +278,7 @@ export interface GefsMetadata {
 export async function fetchGefsMetadata(location: LatLon): Promise<GefsMetadata> {
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
-  const store = new zarr.FetchStore(FORECAST_STORE_URL);
+  const store = await getForecastStore();
 
   const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
     getLatestInitTimeIndex(store),
@@ -364,7 +378,7 @@ export async function fetchRecentWeather(location: LatLon): Promise<RecentWeathe
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
 
-  const store = new zarr.FetchStore(ANALYSIS_STORE_URL);
+  const store = await getAnalysisStore();
   const { startIdx, numSteps } = await getAnalysisTimeRange(store, RECENT_DAYS);
 
   const [tempData, precipData, windUData, windVData, cloudData] = await Promise.all([

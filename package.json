@@ -32,6 +32,7 @@
     "wrangler": "^4.70.0"
   },
   "dependencies": {
+    "icechunk-js": "^0.3.0",
     "proj4": "^2.20.4",
     "zarrita": "^0.6.1"
   }
