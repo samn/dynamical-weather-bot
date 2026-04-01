@@ -1,4 +1,5 @@
 import * as zarr from "zarrita";
+import { IcechunkStore } from "icechunk-js";
 import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
 import {
   latToIndex,
@@ -10,16 +11,25 @@ import {
 } from "./weather.js";
 
 const AIFS_STORE_URL =
-  "https://data.dynamical.org/ecmwf/aifs-single/forecast/latest.zarr?email=weather-forecast-app@dynamical-weather-bot.pages.dev";
+  "https://dynamical-ecmwf-aifs-single.s3.us-west-2.amazonaws.com/ecmwf-aifs-single-forecast/v0.1.0.icechunk/";
+
+/** Cached IcechunkStore instance */
+let storePromise: Promise<IcechunkStore> | null = null;
+
+function getStore(): Promise<IcechunkStore> {
+  if (!storePromise) {
+    storePromise = IcechunkStore.open(AIFS_STORE_URL);
+  }
+  return storePromise;
+}
 
 /** Number of 6-hourly steps to cover 72 hours */
 const STEPS_72H = 12;
 
 /** Fetch just the latest AIFS forecast init time (lightweight metadata check) */
 export async function fetchLatestAifsInitTime(): Promise<string> {
-  const store = new zarr.FetchStore(AIFS_STORE_URL);
-  const loc = zarr.root(store).resolve("init_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+  const store = await getStore();
+  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const lastSec = data[data.length - 1] ?? 0;
@@ -28,7 +38,7 @@ export async function fetchLatestAifsInitTime(): Promise<string> {
 
 /** Metadata needed to fetch individual AIFS variables */
 export interface AifsMetadata {
-  store: zarr.FetchStore;
+  store: IcechunkStore;
   initIdx: number;
   initTime: Date;
   leadTimeHours: number[];
@@ -40,7 +50,7 @@ export interface AifsMetadata {
 export async function fetchAifsMetadata(location: LatLon): Promise<AifsMetadata> {
   const latIdx = latToIndex(location.latitude);
   const lonIdx = lonToIndex(location.longitude);
-  const store = new zarr.FetchStore(AIFS_STORE_URL);
+  const store = await getStore();
 
   const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
     getLatestInitTimeIndex(store),
@@ -51,10 +61,9 @@ export async function fetchAifsMetadata(location: LatLon): Promise<AifsMetadata>
 }
 
 async function getLatestInitTimeIndex(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
 ): Promise<{ index: number; initTime: Date }> {
-  const loc = zarr.root(store).resolve("init_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   const lastIdx = data.length - 1;
@@ -62,9 +71,8 @@ async function getLatestInitTimeIndex(
   return { index: lastIdx, initTime: new Date(secValue * 1000) };
 }
 
-async function getLeadTimeHours(store: zarr.FetchStore, numSteps: number): Promise<number[]> {
-  const loc = zarr.root(store).resolve("lead_time");
-  const arr = await zarr.open(loc, { kind: "array" });
+async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
+  const arr = await zarr.open(store.resolve("lead_time"), { kind: "array" });
   const result = await zarr.get(arr, [zarr.slice(numSteps)]);
   const data = coordToNumbers(result.data);
   return data.map((s) => s / 3600);
@@ -91,15 +99,14 @@ function toPoints(values: number[], leadTimeHours: number[], initTime: Date): Fo
 /** Fetch a single variable from the AIFS store.
  *  AIFS dimensions: (init_time, lead_time, latitude, longitude) */
 async function fetchAifsVar(
-  store: zarr.FetchStore,
+  store: IcechunkStore,
   varName: string,
   initIdx: number,
   latIdx: number,
   lonIdx: number,
   numSteps: number,
 ): Promise<number[]> {
-  const loc = zarr.root(store).resolve(varName);
-  const arr = await zarr.open(loc, { kind: "array" });
+  const arr = await zarr.open(store.resolve(varName), { kind: "array" });
   const result = await zarr.get(arr, [initIdx, zarr.slice(numSteps), latIdx, lonIdx]);
   return Array.from(result.data as Float32Array);
 }
