@@ -24,6 +24,9 @@ interface ChartOptions {
   formatValue?: (v: number) => string;
   /** Optional intensity bands drawn as background shading with y-axis labels */
   intensityBands?: IntensityBand[];
+  /** Fixed time range [startMs, endMs] for x-axis. When set, the x-axis
+   *  always spans this range regardless of the data points present. */
+  timeRange?: [number, number];
 }
 
 interface ChartState {
@@ -42,6 +45,8 @@ interface ChartState {
   fontSize: number;
   smallFontSize: number;
   intensityBands?: IntensityBand[];
+  /** Fixed time range for x-axis positioning */
+  timeRangeMs: [number, number];
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
 }
@@ -295,6 +300,7 @@ export function renderChart(opts: ChartOptions): void {
     convertValue,
     formatValue = (v) => v.toFixed(1),
     intensityBands,
+    timeRange,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -356,7 +362,13 @@ export function renderChart(opts: ChartOptions): void {
     }
   }
 
-  const xScale = (i: number): number => padding.left + (i / (data.length - 1)) * chartWidth;
+  // Time-based x positioning: use fixed timeRange if provided, else derive from data
+  const dataFirstMs = new Date(data[0]!.time).getTime();
+  const dataLastMs = new Date(data[data.length - 1]!.time).getTime();
+  const [xMinMs, xMaxMs] = timeRange ?? [dataFirstMs, dataLastMs];
+  const xTimeSpan = xMaxMs - xMinMs || 1;
+  const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
+  const xScale = (i: number): number => timeToX(new Date(data[i]!.time).getTime());
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
@@ -475,12 +487,9 @@ export function renderChart(opts: ChartOptions): void {
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const maxXLabels = compact ? 4 : 6;
-  const xFirstTime = new Date(data[0]!.time).getTime();
-  const xLastTime = new Date(data[data.length - 1]!.time).getTime();
-  const labelTimes = computeXLabelTimes(xFirstTime, xLastTime, maxXLabels);
+  const labelTimes = computeXLabelTimes(xMinMs, xMaxMs, maxXLabels);
   for (const t of labelTimes) {
-    const fraction = (t - xFirstTime) / (xLastTime - xFirstTime);
-    const x = padding.left + fraction * chartWidth;
+    const x = timeToX(t);
     const date = new Date(t);
     const timeStr = date.toLocaleTimeString(undefined, { hour: "numeric", hour12: true });
     const dayStr = date.toLocaleDateString(undefined, { weekday: "short" });
@@ -490,11 +499,8 @@ export function renderChart(opts: ChartOptions): void {
 
   // "Now" marker — vertical dashed line at current time
   const now = Date.now();
-  const firstTime = new Date(data[0]!.time).getTime();
-  const lastTime = new Date(data[data.length - 1]!.time).getTime();
-  if (now >= firstTime && now <= lastTime) {
-    const fraction = (now - firstTime) / (lastTime - firstTime);
-    const nowX = padding.left + fraction * chartWidth;
+  if (now >= xMinMs && now <= xMaxMs) {
+    const nowX = timeToX(now);
     ctx.save();
     ctx.strokeStyle = "#ffffff60";
     ctx.lineWidth = 1;
@@ -530,6 +536,7 @@ export function renderChart(opts: ChartOptions): void {
     fontSize,
     smallFontSize,
     intensityBands,
+    timeRangeMs: [xMinMs, xMaxMs],
     baseImage,
   });
 
@@ -617,13 +624,24 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
     compact,
   } = state;
 
+  const [xMinMs, xMaxMs] = state.timeRangeMs;
+  const xTimeSpan = xMaxMs - xMinMs || 1;
+  const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
+
   // Find nearest data point index from pointer x
-  const fraction = (pointerX - padding.left) / chartWidth;
-  const rawIdx = fraction * (data.length - 1);
-  const idx = Math.max(0, Math.min(data.length - 1, Math.round(rawIdx)));
+  const pointerMs = xMinMs + ((pointerX - padding.left) / chartWidth) * xTimeSpan;
+  let idx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const dist = Math.abs(new Date(data[i]!.time).getTime() - pointerMs);
+    if (dist < bestDist) {
+      bestDist = dist;
+      idx = i;
+    }
+  }
   const point = data[idx]!;
 
-  const xScale = (i: number): number => padding.left + (i / (data.length - 1)) * chartWidth;
+  const xScale = (i: number): number => timeToX(new Date(data[i]!.time).getTime());
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 

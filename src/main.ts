@@ -28,6 +28,7 @@ import {
 import type { ModelId } from "./types.js";
 import {
   blendSingleVariable,
+  computeCommonTimeRange,
   computeWeights,
   lookupAccuracy,
   type ModelVariableInput,
@@ -130,6 +131,9 @@ let cachedModelInputs: Map<ForecastVariable, ModelVariableInput[]> | null = null
 let cachedLocation: LatLon | null = null;
 let cachedInitTime: string | null = null;
 let hrrrAvailable = true;
+
+/** Fixed time range [startMs, endMs] computed from all models so x-axis stays stable */
+let cachedTimeRange: [number, number] | undefined;
 
 /** Last selected zip code for display */
 let lastZip: string | null = null;
@@ -281,7 +285,7 @@ function renderVariableChart(
   data: import("./types.js").ForecastPoint[],
 ): void {
   const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
-  renderChart({ canvas, data, ...chartOptsForVariable(variable) });
+  renderChart({ canvas, data, timeRange: cachedTimeRange, ...chartOptsForVariable(variable) });
 }
 
 function renderCharts(forecast: ForecastData): void {
@@ -429,6 +433,8 @@ async function checkForNewerForecast(
     cachedLocation = location;
     cachedInitTime = latestInit;
     lastRecentWeather = recentWeather;
+    const firstVar = newCache.values().next().value;
+    cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
 
     if (isNewer) {
       initTimeLabel.textContent = formatInitTime(latestInit);
@@ -541,6 +547,9 @@ async function loadForecast(location: LatLon): Promise<void> {
       if (cached.modelInputs) {
         cachedModelInputs = cached.modelInputs;
         hrrrAvailable = cached.hrrrAvailable;
+        // Compute time range from the first cached variable
+        const firstVar = cachedModelInputs.values().next().value;
+        cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
       }
 
       initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
@@ -586,6 +595,7 @@ async function loadForecast(location: LatLon): Promise<void> {
     cachedModelInputs = new Map<ForecastVariable, ModelVariableInput[]>();
     cachedLocation = location;
     cachedInitTime = latestInitTime;
+    cachedTimeRange = undefined;
 
     // Kick off all variable fetches + recent weather in parallel
     const grid = loadAccuracyGrid();
@@ -618,6 +628,12 @@ async function loadForecast(location: LatLon): Promise<void> {
         allInputs.push({ model: "NOAA HRRR", points: hrrrPoints, isEnsemble: false });
       }
       cachedModelInputs!.set(variable, allInputs);
+
+      // Compute common time range from first variable (all variables share the same
+      // time steps per model, so the first one is representative)
+      if (!cachedTimeRange) {
+        cachedTimeRange = computeCommonTimeRange(allInputs);
+      }
 
       // Blend only enabled models for display
       const filtered = allInputs.filter((i) => enabledModels.has(i.model));

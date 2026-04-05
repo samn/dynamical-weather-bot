@@ -176,6 +176,24 @@ export interface ModelVariableInput {
   isEnsemble: boolean;
 }
 
+/** Compute the intersection time range across all model inputs.
+ *  Returns [startMs, endMs] or undefined if inputs are empty/non-overlapping. */
+export function computeCommonTimeRange(inputs: ModelVariableInput[]): [number, number] | undefined {
+  let latestStart = -Infinity;
+  let earliestEnd = Infinity;
+  for (const input of inputs) {
+    if (input.points.length === 0) continue;
+    const start = new Date(input.points[0]!.time).getTime();
+    const end = new Date(input.points[input.points.length - 1]!.time).getTime();
+    if (start > latestStart) latestStart = start;
+    if (end < earliestEnd) earliestEnd = end;
+  }
+  if (latestStart === -Infinity || earliestEnd === Infinity || latestStart >= earliestEnd) {
+    return undefined;
+  }
+  return [latestStart, earliestEnd];
+}
+
 /**
  * Blend multiple model forecasts using accuracy-weighted averaging.
  *
