@@ -1,4 +1,6 @@
 import type { ForecastPoint } from "./types.js";
+import type { TimeMarker } from "./solar.js";
+import { computeTimeMarkers } from "./solar.js";
 
 /** A horizontal band drawn behind the chart to indicate intensity levels */
 export interface IntensityBand {
@@ -27,6 +29,10 @@ interface ChartOptions {
   /** Fixed time range [startMs, endMs] for x-axis. When set, the x-axis
    *  always spans this range regardless of the data points present. */
   timeRange?: [number, number];
+  /** Location latitude for sunrise/sunset markers */
+  latitude?: number;
+  /** Location longitude for sunrise/sunset markers */
+  longitude?: number;
 }
 
 interface ChartState {
@@ -57,6 +63,147 @@ interface ConvertedPoint extends ForecastPoint {
   p90: number;
   min: number;
   max: number;
+}
+
+/** Returns the display label for a time marker type */
+export function timeMarkerLabel(type: TimeMarker["type"]): string {
+  switch (type) {
+    case "midnight":
+      return "12 AM";
+    case "noon":
+      return "12 PM";
+    case "sunrise":
+      return "Sunrise";
+    case "sunset":
+      return "Sunset";
+  }
+}
+
+/** Draw a sun icon (circle with rays) at the given center point */
+function drawSunIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number): void {
+  const r = size * 0.35;
+  const rayLen = size * 0.2;
+  const rayStart = r + size * 0.08;
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = size * 0.1;
+  for (let i = 0; i < 8; i++) {
+    const angle = (i * Math.PI) / 4;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(angle) * rayStart, cy + Math.sin(angle) * rayStart);
+    ctx.lineTo(
+      cx + Math.cos(angle) * (rayStart + rayLen),
+      cy + Math.sin(angle) * (rayStart + rayLen),
+    );
+    ctx.stroke();
+  }
+}
+
+/** Draw a crescent moon icon at the given center point */
+function drawMoonIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number): void {
+  const r = size * 0.4;
+  // Outer circle
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  // Cut out an inner circle offset to the right to make a crescent
+  const saved = ctx.globalCompositeOperation;
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.55, cy - r * 0.15, r * 0.75, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = saved;
+}
+
+/** Draw a half-sun on the horizon for sunrise/sunset */
+function drawHorizonSunIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+  rising: boolean,
+): void {
+  const r = size * 0.3;
+  const horizonY = cy + r * 0.1;
+
+  // Draw rays above horizon
+  const rayLen = size * 0.18;
+  const rayStart = r + size * 0.06;
+  ctx.lineWidth = size * 0.08;
+  const rayCount = 5;
+  for (let i = 0; i < rayCount; i++) {
+    const angle = -Math.PI + (i * Math.PI) / (rayCount - 1);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(angle) * rayStart, horizonY + Math.sin(angle) * rayStart);
+    ctx.lineTo(
+      cx + Math.cos(angle) * (rayStart + rayLen),
+      horizonY + Math.sin(angle) * (rayStart + rayLen),
+    );
+    ctx.stroke();
+  }
+
+  // Half sun (upper semicircle)
+  ctx.beginPath();
+  ctx.arc(cx, horizonY, r, -Math.PI, 0);
+  ctx.fill();
+
+  // Horizon line
+  ctx.lineWidth = size * 0.08;
+  ctx.beginPath();
+  ctx.moveTo(cx - size * 0.45, horizonY);
+  ctx.lineTo(cx + size * 0.45, horizonY);
+  ctx.stroke();
+
+  // Small arrow indicating direction
+  const arrowX = rising ? cx + size * 0.3 : cx - size * 0.3;
+  const arrowDir = rising ? -1 : 1; // rising: arrow points up
+  ctx.beginPath();
+  ctx.moveTo(arrowX, horizonY - size * 0.2);
+  ctx.lineTo(arrowX - size * 0.08, horizonY - size * 0.2 - arrowDir * size * 0.12);
+  ctx.lineTo(arrowX + size * 0.08, horizonY - size * 0.2 - arrowDir * size * 0.12);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/** Marker style configuration */
+const MARKER_STYLES: Record<TimeMarker["type"], { color: string; lineColor: string }> = {
+  midnight: { color: "#6b7394", lineColor: "#6b739420" },
+  noon: { color: "#f5c842", lineColor: "#f5c84215" },
+  sunrise: { color: "#f5a050", lineColor: "#f5a05015" },
+  sunset: { color: "#e07040", lineColor: "#e0704015" },
+};
+
+/** Draw a time marker icon for the given type */
+function drawMarkerIcon(
+  ctx: CanvasRenderingContext2D,
+  type: TimeMarker["type"],
+  cx: number,
+  cy: number,
+  size: number,
+): void {
+  ctx.save();
+  ctx.fillStyle = MARKER_STYLES[type].color;
+  ctx.strokeStyle = MARKER_STYLES[type].color;
+
+  switch (type) {
+    case "midnight":
+      drawMoonIcon(ctx, cx, cy, size);
+      break;
+    case "noon":
+      drawSunIcon(ctx, cx, cy, size);
+      break;
+    case "sunrise":
+      drawHorizonSunIcon(ctx, cx, cy, size, true);
+      break;
+    case "sunset":
+      drawHorizonSunIcon(ctx, cx, cy, size, false);
+      break;
+  }
+
+  ctx.restore();
 }
 
 const NICE_HOUR_INTERVALS = [3, 6, 12, 24];
@@ -301,6 +448,8 @@ export function renderChart(opts: ChartOptions): void {
     formatValue = (v) => v.toFixed(1),
     intensityBands,
     timeRange,
+    latitude,
+    longitude,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -514,6 +663,30 @@ export function renderChart(opts: ChartOptions): void {
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText("now", nowX, padding.top - 1);
+  }
+
+  // Time markers — midnight, noon, sunrise, sunset
+  if (latitude !== undefined && longitude !== undefined) {
+    const markers = computeTimeMarkers(xMinMs, xMaxMs, latitude, longitude);
+    const iconSize = compact ? 8 : 10;
+    for (const marker of markers) {
+      const mx = timeToX(marker.timeMs);
+      const style = MARKER_STYLES[marker.type];
+
+      // Vertical line
+      ctx.save();
+      ctx.strokeStyle = style.lineColor;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(mx, padding.top);
+      ctx.lineTo(mx, padding.top + chartHeight);
+      ctx.stroke();
+      ctx.restore();
+
+      // Icon above chart area
+      drawMarkerIcon(ctx, marker.type, mx, padding.top - iconSize * 0.5 - 1, iconSize);
+    }
   }
 
   // Save base image and chart state for tooltip interaction

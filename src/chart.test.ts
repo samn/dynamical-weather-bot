@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeXLabelTimes } from "./chart.js";
+import { computeXLabelTimes, timeMarkerLabel } from "./chart.js";
 
 /** Helper: create a local-time Date. */
 function localDate(
@@ -108,5 +108,23 @@ describe("computeXLabelTimes", () => {
     const labels = computeXLabelTimes(first, last, 6);
     expect(labels.length).toBeGreaterThan(0);
     expect(labels.length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe("timeMarkerLabel", () => {
+  it("returns '12 AM' for midnight", () => {
+    expect(timeMarkerLabel("midnight")).toBe("12 AM");
+  });
+
+  it("returns '12 PM' for noon", () => {
+    expect(timeMarkerLabel("noon")).toBe("12 PM");
+  });
+
+  it("returns 'Sunrise' for sunrise", () => {
+    expect(timeMarkerLabel("sunrise")).toBe("Sunrise");
+  });
+
+  it("returns 'Sunset' for sunset", () => {
+    expect(timeMarkerLabel("sunset")).toBe("Sunset");
   });
 });

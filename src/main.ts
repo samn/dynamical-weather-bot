@@ -290,7 +290,14 @@ function renderVariableChart(
   data: import("./types.js").ForecastPoint[],
 ): void {
   const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
-  renderChart({ canvas, data, timeRange: cachedTimeRange, ...chartOptsForVariable(variable) });
+  renderChart({
+    canvas,
+    data,
+    timeRange: cachedTimeRange,
+    latitude: cachedLocation?.latitude,
+    longitude: cachedLocation?.longitude,
+    ...chartOptsForVariable(variable),
+  });
 }
 
 function renderCharts(forecast: ForecastData): void {
