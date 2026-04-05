@@ -135,6 +135,11 @@ let hrrrAvailable = true;
 /** Fixed time range [startMs, endMs] computed from all models so x-axis stays stable */
 let cachedTimeRange: [number, number] | undefined;
 
+function updateCachedTimeRange(inputs: Map<ForecastVariable, ModelVariableInput[]>): void {
+  const firstVar = inputs.values().next().value;
+  cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
+}
+
 /** Last selected zip code for display */
 let lastZip: string | null = null;
 
@@ -433,8 +438,7 @@ async function checkForNewerForecast(
     cachedLocation = location;
     cachedInitTime = latestInit;
     lastRecentWeather = recentWeather;
-    const firstVar = newCache.values().next().value;
-    cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
+    updateCachedTimeRange(newCache);
 
     if (isNewer) {
       initTimeLabel.textContent = formatInitTime(latestInit);
@@ -547,9 +551,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       if (cached.modelInputs) {
         cachedModelInputs = cached.modelInputs;
         hrrrAvailable = cached.hrrrAvailable;
-        // Compute time range from the first cached variable
-        const firstVar = cachedModelInputs.values().next().value;
-        cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
+        updateCachedTimeRange(cachedModelInputs);
       }
 
       initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
@@ -629,10 +631,8 @@ async function loadForecast(location: LatLon): Promise<void> {
       }
       cachedModelInputs!.set(variable, allInputs);
 
-      // Compute common time range from first variable (all variables share the same
-      // time steps per model, so the first one is representative)
       if (!cachedTimeRange) {
-        cachedTimeRange = computeCommonTimeRange(allInputs);
+        updateCachedTimeRange(cachedModelInputs!);
       }
 
       // Blend only enabled models for display

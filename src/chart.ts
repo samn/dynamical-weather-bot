@@ -45,13 +45,13 @@ interface ChartState {
   fontSize: number;
   smallFontSize: number;
   intensityBands?: IntensityBand[];
-  /** Fixed time range for x-axis positioning */
-  timeRangeMs: [number, number];
+  timeToX: (ms: number) => number;
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
 }
 
 interface ConvertedPoint extends ForecastPoint {
+  timeMs: number;
   median: number;
   p10: number;
   p90: number;
@@ -306,6 +306,7 @@ export function renderChart(opts: ChartOptions): void {
   const conv = convertValue ?? ((v: number) => v);
   const data: ConvertedPoint[] = rawData.map((p) => ({
     ...p,
+    timeMs: new Date(p.time).getTime(),
     median: conv(p.median),
     p10: conv(p.p10),
     p90: conv(p.p90),
@@ -362,13 +363,10 @@ export function renderChart(opts: ChartOptions): void {
     }
   }
 
-  // Time-based x positioning: use fixed timeRange if provided, else derive from data
-  const dataFirstMs = new Date(data[0]!.time).getTime();
-  const dataLastMs = new Date(data[data.length - 1]!.time).getTime();
-  const [xMinMs, xMaxMs] = timeRange ?? [dataFirstMs, dataLastMs];
+  const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
   const xTimeSpan = xMaxMs - xMinMs || 1;
   const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
-  const xScale = (i: number): number => timeToX(new Date(data[i]!.time).getTime());
+  const xScale = (i: number): number => timeToX(data[i]!.timeMs);
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
@@ -536,7 +534,7 @@ export function renderChart(opts: ChartOptions): void {
     fontSize,
     smallFontSize,
     intensityBands,
-    timeRangeMs: [xMinMs, xMaxMs],
+    timeToX,
     baseImage,
   });
 
@@ -624,16 +622,17 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
     compact,
   } = state;
 
-  const [xMinMs, xMaxMs] = state.timeRangeMs;
-  const xTimeSpan = xMaxMs - xMinMs || 1;
-  const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
+  const { timeToX } = state;
 
-  // Find nearest data point index from pointer x
-  const pointerMs = xMinMs + ((pointerX - padding.left) / chartWidth) * xTimeSpan;
+  // Find nearest data point by pre-cached timestamp
+  const pointerMs =
+    data[0]!.timeMs +
+    ((pointerX - padding.left) / chartWidth) *
+      (data[data.length - 1]!.timeMs - data[0]!.timeMs || 1);
   let idx = 0;
   let bestDist = Infinity;
   for (let i = 0; i < data.length; i++) {
-    const dist = Math.abs(new Date(data[i]!.time).getTime() - pointerMs);
+    const dist = Math.abs(data[i]!.timeMs - pointerMs);
     if (dist < bestDist) {
       bestDist = dist;
       idx = i;
@@ -641,12 +640,11 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
   }
   const point = data[idx]!;
 
-  const xScale = (i: number): number => timeToX(new Date(data[i]!.time).getTime());
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
   const dpr = window.devicePixelRatio || 1;
-  const x = xScale(idx);
+  const x = timeToX(point.timeMs);
 
   // Restore base chart (putImageData ignores transforms, operates in pixel space)
   ctx.putImageData(state.baseImage, 0, 0);
