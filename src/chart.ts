@@ -665,10 +665,19 @@ export function renderChart(opts: ChartOptions): void {
     ctx.fillText("now", nowX, padding.top - 1);
   }
 
-  // Time markers — midnight, noon, sunrise, sunset
+  // Time markers — sunrise and sunset only
   if (latitude !== undefined && longitude !== undefined) {
-    const markers = computeTimeMarkers(xMinMs, xMaxMs, latitude, longitude);
+    const markers = computeTimeMarkers(xMinMs, xMaxMs, latitude, longitude).filter(
+      (m) => m.type === "sunrise" || m.type === "sunset",
+    );
     const iconSize = compact ? 8 : 10;
+
+    // Clip lines to the chart area so they don't bleed past the y-axis
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
+    ctx.clip();
+
     for (const marker of markers) {
       const mx = timeToX(marker.timeMs);
       const style = MARKER_STYLES[marker.type];
@@ -683,9 +692,19 @@ export function renderChart(opts: ChartOptions): void {
       ctx.lineTo(mx, padding.top + chartHeight);
       ctx.stroke();
       ctx.restore();
+    }
+    ctx.restore(); // remove clip
 
-      // Icon above chart area
-      drawMarkerIcon(ctx, marker.type, mx, padding.top - iconSize * 0.5 - 1, iconSize);
+    for (const marker of markers) {
+      const mx = timeToX(marker.timeMs);
+      // Only draw icon if it's fully within the chart area
+      if (mx - iconSize / 2 >= padding.left && mx + iconSize / 2 <= padding.left + chartWidth) {
+        // Skip icon if too close to the "now" marker to avoid overlap
+        const nowX = now >= xMinMs && now <= xMaxMs ? timeToX(now) : -Infinity;
+        if (Math.abs(mx - nowX) > iconSize * 2) {
+          drawMarkerIcon(ctx, marker.type, mx, padding.top - iconSize * 0.5 - 1, iconSize);
+        }
+      }
     }
   }
 
