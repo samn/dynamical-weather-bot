@@ -28,6 +28,8 @@ Pre-commit hooks run oxlint, typecheck, and tests on all commits.
 
 **IMPORTANT:** Before every commit, you MUST run `npm run check` and fix all errors. This runs formatting, type checking, linting, and tests. Do not commit until all checks pass. Do not skip or bypass these checks (e.g. never use `--no-verify`).
 
+**Workflow:** After making ANY code change, immediately run `npm run check` to verify correctness. Fix all failures before committing. Never commit without a passing `npm run check` first.
+
 ## Architecture
 
 **Data flow:** User provides location (geolocation or ZIP) → fetch GEFS forecast + recent analysis from dynamical.org Zarr stores → compute ensemble statistics → detect aberrations vs recent weather → render canvas charts.

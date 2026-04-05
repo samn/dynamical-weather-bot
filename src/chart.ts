@@ -24,6 +24,9 @@ interface ChartOptions {
   formatValue?: (v: number) => string;
   /** Optional intensity bands drawn as background shading with y-axis labels */
   intensityBands?: IntensityBand[];
+  /** Fixed time range [startMs, endMs] for x-axis. When set, the x-axis
+   *  always spans this range regardless of the data points present. */
+  timeRange?: [number, number];
 }
 
 interface ChartState {
@@ -42,16 +45,56 @@ interface ChartState {
   fontSize: number;
   smallFontSize: number;
   intensityBands?: IntensityBand[];
+  timeToX: (ms: number) => number;
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
 }
 
 interface ConvertedPoint extends ForecastPoint {
+  timeMs: number;
   median: number;
   p10: number;
   p90: number;
   min: number;
   max: number;
+}
+
+const NICE_HOUR_INTERVALS = [3, 6, 12, 24];
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/**
+ * Compute x-axis label timestamps snapped to consistent clock-hour boundaries.
+ * Labels are placed at multiples of a "nice" hour interval (3, 6, 12, or 24h)
+ * so they remain stable regardless of how many data points exist.
+ */
+export function computeXLabelTimes(
+  firstTimeMs: number,
+  lastTimeMs: number,
+  maxLabels: number,
+): number[] {
+  const totalHours = (lastTimeMs - firstTimeMs) / MS_PER_HOUR;
+  if (totalHours <= 0 || maxLabels <= 0) return [];
+
+  const rawInterval = totalHours / maxLabels;
+  const hourInterval =
+    NICE_HOUR_INTERVALS.find((h) => h >= rawInterval) ?? Math.ceil(rawInterval / 24) * 24;
+
+  // Round up to the next clock-hour boundary in local time
+  const first = new Date(firstTimeMs);
+  const firstLocalHour = first.getHours();
+  const nextBoundaryHour = Math.ceil((firstLocalHour + 1) / hourInterval) * hourInterval;
+  const start = new Date(first);
+  start.setHours(nextBoundaryHour, 0, 0, 0);
+  // If rounding landed before or at the first data point, advance one interval
+  if (start.getTime() <= firstTimeMs) {
+    start.setTime(start.getTime() + hourInterval * MS_PER_HOUR);
+  }
+
+  const labels: number[] = [];
+  for (let t = start.getTime(); t < lastTimeMs; t += hourInterval * MS_PER_HOUR) {
+    labels.push(t);
+  }
+  return labels;
 }
 
 const chartStates = new WeakMap<HTMLCanvasElement, ChartState>();
@@ -257,11 +300,13 @@ export function renderChart(opts: ChartOptions): void {
     convertValue,
     formatValue = (v) => v.toFixed(1),
     intensityBands,
+    timeRange,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
   const data: ConvertedPoint[] = rawData.map((p) => ({
     ...p,
+    timeMs: new Date(p.time).getTime(),
     median: conv(p.median),
     p10: conv(p.p10),
     p90: conv(p.p90),
@@ -318,7 +363,10 @@ export function renderChart(opts: ChartOptions): void {
     }
   }
 
-  const xScale = (i: number): number => padding.left + (i / (data.length - 1)) * chartWidth;
+  const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
+  const xTimeSpan = xMaxMs - xMinMs || 1;
+  const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
+  const xScale = (i: number): number => timeToX(data[i]!.timeMs);
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
@@ -431,17 +479,16 @@ export function renderChart(opts: ChartOptions): void {
     }
   }
 
-  // X axis labels (show every N hours)
+  // X axis labels at consistent clock-hour boundaries
   ctx.fillStyle = "#8b8fa3";
   ctx.font = `${smallFontSize}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const maxXLabels = compact ? 4 : 6;
-  const xLabelInterval = Math.max(1, Math.floor(data.length / maxXLabels));
-  for (let i = 0; i < data.length; i += xLabelInterval) {
-    const p = data[i]!;
-    const x = xScale(i);
-    const date = new Date(p.time);
+  const labelTimes = computeXLabelTimes(xMinMs, xMaxMs, maxXLabels);
+  for (const t of labelTimes) {
+    const x = timeToX(t);
+    const date = new Date(t);
     const timeStr = date.toLocaleTimeString(undefined, { hour: "numeric", hour12: true });
     const dayStr = date.toLocaleDateString(undefined, { weekday: "short" });
     ctx.fillText(`${dayStr}`, x, padding.top + chartHeight + 2);
@@ -450,11 +497,8 @@ export function renderChart(opts: ChartOptions): void {
 
   // "Now" marker — vertical dashed line at current time
   const now = Date.now();
-  const firstTime = new Date(data[0]!.time).getTime();
-  const lastTime = new Date(data[data.length - 1]!.time).getTime();
-  if (now >= firstTime && now <= lastTime) {
-    const fraction = (now - firstTime) / (lastTime - firstTime);
-    const nowX = padding.left + fraction * chartWidth;
+  if (now >= xMinMs && now <= xMaxMs) {
+    const nowX = timeToX(now);
     ctx.save();
     ctx.strokeStyle = "#ffffff60";
     ctx.lineWidth = 1;
@@ -490,6 +534,7 @@ export function renderChart(opts: ChartOptions): void {
     fontSize,
     smallFontSize,
     intensityBands,
+    timeToX,
     baseImage,
   });
 
@@ -577,18 +622,29 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
     compact,
   } = state;
 
-  // Find nearest data point index from pointer x
-  const fraction = (pointerX - padding.left) / chartWidth;
-  const rawIdx = fraction * (data.length - 1);
-  const idx = Math.max(0, Math.min(data.length - 1, Math.round(rawIdx)));
+  const { timeToX } = state;
+
+  // Find nearest data point by pre-cached timestamp
+  const pointerMs =
+    data[0]!.timeMs +
+    ((pointerX - padding.left) / chartWidth) *
+      (data[data.length - 1]!.timeMs - data[0]!.timeMs || 1);
+  let idx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const dist = Math.abs(data[i]!.timeMs - pointerMs);
+    if (dist < bestDist) {
+      bestDist = dist;
+      idx = i;
+    }
+  }
   const point = data[idx]!;
 
-  const xScale = (i: number): number => padding.left + (i / (data.length - 1)) * chartWidth;
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
   const dpr = window.devicePixelRatio || 1;
-  const x = xScale(idx);
+  const x = timeToX(point.timeMs);
 
   // Restore base chart (putImageData ignores transforms, operates in pixel space)
   ctx.putImageData(state.baseImage, 0, 0);

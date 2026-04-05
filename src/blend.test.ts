@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeWeights, blendForecasts, lookupAccuracy } from "./blend.js";
+import { computeCommonTimeRange, computeWeights, blendForecasts, lookupAccuracy } from "./blend.js";
 import type { ModelForecast, AccuracyGrid, ForecastPoint, NearbyStation } from "./types.js";
 
 function makeForecastPoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
@@ -580,5 +580,61 @@ describe("blendForecasts", () => {
     expect(result.temperature[0]!.median).toBe(15);
     expect(result.temperature[0]!.p10).toBe(12);
     expect(result.temperature[0]!.p90).toBe(18);
+  });
+});
+
+describe("computeCommonTimeRange", () => {
+  function pts(startHour: number, endHour: number, stepHours: number): ForecastPoint[] {
+    const result: ForecastPoint[] = [];
+    for (let h = startHour; h <= endHour; h += stepHours) {
+      const time = new Date(Date.UTC(2026, 3, 1, h)).toISOString();
+      result.push(makeForecastPoint({ time, hoursFromNow: h }));
+    }
+    return result;
+  }
+
+  it("returns the intersection of overlapping time ranges", () => {
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
+      { model: "NOAA HRRR" as const, points: pts(6, 48, 1), isEnsemble: false },
+    ];
+    const range = computeCommonTimeRange(inputs);
+    expect(range).toBeDefined();
+    // HRRR starts later (hour 6) and ends earlier (hour 48)
+    expect(range![0]).toBe(new Date(Date.UTC(2026, 3, 1, 6)).getTime());
+    expect(range![1]).toBe(new Date(Date.UTC(2026, 3, 1, 48)).getTime());
+  });
+
+  it("returns undefined for empty inputs", () => {
+    expect(computeCommonTimeRange([])).toBeUndefined();
+  });
+
+  it("returns undefined when inputs have no overlap", () => {
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: pts(0, 24, 3), isEnsemble: true },
+      { model: "NOAA HRRR" as const, points: pts(48, 72, 1), isEnsemble: false },
+    ];
+    expect(computeCommonTimeRange(inputs)).toBeUndefined();
+  });
+
+  it("skips inputs with empty points", () => {
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
+      { model: "NOAA HRRR" as const, points: [], isEnsemble: false },
+    ];
+    const range = computeCommonTimeRange(inputs);
+    expect(range).toBeDefined();
+    expect(range![0]).toBe(new Date(Date.UTC(2026, 3, 1, 0)).getTime());
+    expect(range![1]).toBe(new Date(Date.UTC(2026, 3, 1, 72)).getTime());
+  });
+
+  it("returns same range regardless of which models are included", () => {
+    const gefs = { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true };
+    const hrrr = { model: "NOAA HRRR" as const, points: pts(6, 48, 1), isEnsemble: false };
+    const ecmwf = { model: "ECMWF IFS ENS" as const, points: pts(0, 72, 3), isEnsemble: true };
+
+    const allModels = computeCommonTimeRange([gefs, hrrr, ecmwf]);
+    const gefsOnly = computeCommonTimeRange([gefs, hrrr, ecmwf]);
+    expect(allModels).toEqual(gefsOnly);
   });
 });
