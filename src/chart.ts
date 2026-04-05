@@ -54,6 +54,44 @@ interface ConvertedPoint extends ForecastPoint {
   max: number;
 }
 
+const NICE_HOUR_INTERVALS = [3, 6, 12, 24];
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/**
+ * Compute x-axis label timestamps snapped to consistent clock-hour boundaries.
+ * Labels are placed at multiples of a "nice" hour interval (3, 6, 12, or 24h)
+ * so they remain stable regardless of how many data points exist.
+ */
+export function computeXLabelTimes(
+  firstTimeMs: number,
+  lastTimeMs: number,
+  maxLabels: number,
+): number[] {
+  const totalHours = (lastTimeMs - firstTimeMs) / MS_PER_HOUR;
+  if (totalHours <= 0 || maxLabels <= 0) return [];
+
+  const rawInterval = totalHours / maxLabels;
+  const hourInterval =
+    NICE_HOUR_INTERVALS.find((h) => h >= rawInterval) ?? Math.ceil(rawInterval / 24) * 24;
+
+  // Round up to the next clock-hour boundary in local time
+  const first = new Date(firstTimeMs);
+  const firstLocalHour = first.getHours();
+  const nextBoundaryHour = Math.ceil((firstLocalHour + 1) / hourInterval) * hourInterval;
+  const start = new Date(first);
+  start.setHours(nextBoundaryHour, 0, 0, 0);
+  // If rounding landed before or at the first data point, advance one interval
+  if (start.getTime() <= firstTimeMs) {
+    start.setTime(start.getTime() + hourInterval * MS_PER_HOUR);
+  }
+
+  const labels: number[] = [];
+  for (let t = start.getTime(); t < lastTimeMs; t += hourInterval * MS_PER_HOUR) {
+    labels.push(t);
+  }
+  return labels;
+}
+
 const chartStates = new WeakMap<HTMLCanvasElement, ChartState>();
 const listenersAttached = new WeakSet<HTMLCanvasElement>();
 
@@ -431,17 +469,19 @@ export function renderChart(opts: ChartOptions): void {
     }
   }
 
-  // X axis labels (show every N hours)
+  // X axis labels at consistent clock-hour boundaries
   ctx.fillStyle = "#8b8fa3";
   ctx.font = `${smallFontSize}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const maxXLabels = compact ? 4 : 6;
-  const xLabelInterval = Math.max(1, Math.floor(data.length / maxXLabels));
-  for (let i = 0; i < data.length; i += xLabelInterval) {
-    const p = data[i]!;
-    const x = xScale(i);
-    const date = new Date(p.time);
+  const xFirstTime = new Date(data[0]!.time).getTime();
+  const xLastTime = new Date(data[data.length - 1]!.time).getTime();
+  const labelTimes = computeXLabelTimes(xFirstTime, xLastTime, maxXLabels);
+  for (const t of labelTimes) {
+    const fraction = (t - xFirstTime) / (xLastTime - xFirstTime);
+    const x = padding.left + fraction * chartWidth;
+    const date = new Date(t);
     const timeStr = date.toLocaleTimeString(undefined, { hour: "numeric", hour12: true });
     const dayStr = date.toLocaleDateString(undefined, { weekday: "short" });
     ctx.fillText(`${dayStr}`, x, padding.top + chartHeight + 2);
