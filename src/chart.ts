@@ -52,6 +52,8 @@ interface ChartState {
   smallFontSize: number;
   intensityBands?: IntensityBand[];
   timeToX: (ms: number) => number;
+  xMinMs: number;
+  xMaxMs: number;
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
 }
@@ -727,6 +729,8 @@ export function renderChart(opts: ChartOptions): void {
     smallFontSize,
     intensityBands,
     timeToX,
+    xMinMs,
+    xMaxMs,
     baseImage,
   });
 
@@ -814,13 +818,10 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
     compact,
   } = state;
 
-  const { timeToX } = state;
+  const { timeToX, xMinMs, xMaxMs } = state;
 
   // Find nearest data point by pre-cached timestamp
-  const pointerMs =
-    data[0]!.timeMs +
-    ((pointerX - padding.left) / chartWidth) *
-      (data[data.length - 1]!.timeMs - data[0]!.timeMs || 1);
+  const pointerMs = xMinMs + ((pointerX - padding.left) / chartWidth) * (xMaxMs - xMinMs || 1);
   let idx = 0;
   let bestDist = Infinity;
   for (let i = 0; i < data.length; i++) {
