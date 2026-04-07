@@ -21,6 +21,8 @@ export default defineConfig({
         "src/hrrr.ts",
         "src/ecmwf.ts",
         "src/aifs.ts",
+        "src/model-selection.ts",
+        "scripts/**",
       ],
       thresholds: {
         statements: 90,
