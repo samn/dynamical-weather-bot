@@ -40,10 +40,12 @@ const MAX_RADIUS_KM = 75;
 /** Minimum distance cap for IDW to avoid division issues */
 const MIN_DISTANCE_KM = 10;
 
-/** Variables of interest and their preferred metric */
-const VARIABLE_METRICS: Record<string, string> = {
-  temperature_2m: "RMSE",
-  precipitation_surface: "MAE",
+/** Variables of interest and their metrics in preference order (bias-corrected first).
+ *  See dynamical-org/scorecard#29 — bias correction removes systematic grid-to-station
+ *  spatial offsets, giving more accurate skill estimates for model weighting. */
+const VARIABLE_METRICS: Record<string, string[]> = {
+  temperature_2m: ["RMSE_bc", "RMSE"],
+  precipitation_surface: ["MAE_bc", "MAE"],
 };
 
 interface GridCell {
@@ -100,16 +102,19 @@ async function main() {
     "ECMWF AIFS Single": "ECMWF AIFS",
   };
 
-  // Filter and group by station in a single pass
   type StationMetrics = Record<string, Record<string, Record<string, number>>>; // model → variable → leadHours → value
   const stationMetrics = new Map<string, StationMetrics>();
-  let filteredCount = 0;
+  const storedPriority = new Map<string, number>();
+  let uniqueCount = 0;
+  let bcCount = 0;
 
   for (const r of rows) {
     const modelId = PARQUET_TO_MODEL[r.model];
     if (modelId === undefined) continue;
-    const expectedMetric = VARIABLE_METRICS[r.variable];
-    if (!expectedMetric || r.metric !== expectedMetric) continue;
+    const acceptedMetrics = VARIABLE_METRICS[r.variable];
+    if (!acceptedMetrics) continue;
+    const metricPriority = acceptedMetrics.indexOf(r.metric);
+    if (metricPriority < 0) continue;
     // Check window (allow some tolerance for different representations)
     if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) continue;
     if (!isFinite(r.value) || r.value <= 0) continue;
@@ -117,7 +122,14 @@ async function main() {
     const hourBin = leadTimeToHourBin(r.lead_time);
     if (hourBin === undefined) continue;
 
-    filteredCount++;
+    const priorityKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}`;
+    const existing = storedPriority.get(priorityKey);
+    if (existing !== undefined && existing <= metricPriority) continue;
+
+    if (existing === undefined) uniqueCount++;
+    if (metricPriority === 0) bcCount++;
+    storedPriority.set(priorityKey, metricPriority);
+
     let sm = stationMetrics.get(r.station_id);
     if (!sm) {
       sm = {};
@@ -128,7 +140,7 @@ async function main() {
     sm[modelId]![r.variable]![String(hourBin)] = r.value;
   }
 
-  console.log(`Filtered to ${filteredCount} relevant rows`);
+  console.log(`${uniqueCount} unique station/model/variable/lead combinations (${bcCount} bias-corrected)`);
 
   console.log(`${stationMetrics.size} stations have relevant metrics`);
 
