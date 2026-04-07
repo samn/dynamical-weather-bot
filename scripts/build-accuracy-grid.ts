@@ -10,6 +10,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parquetRead } from "hyparquet";
 import { haversineKm } from "../src/geo.js";
+import type { ModelId } from "../src/types.js";
 import {
   GRID_RES,
   snapToGrid,
@@ -91,36 +92,43 @@ async function main() {
 
   console.log(`Parsed ${rows.length} statistic rows`);
 
-  // Filter to relevant rows
-  const models = new Set(["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]);
-  const filtered = rows.filter((r) => {
-    if (!models.has(r.model)) return false;
-    const expectedMetric = VARIABLE_METRICS[r.variable];
-    if (!expectedMetric || r.metric !== expectedMetric) return false;
-    // Check window (allow some tolerance for different representations)
-    if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) return false;
-    return isFinite(r.value) && r.value > 0;
-  });
+  // Map parquet model names to our internal ModelId strings
+  const PARQUET_TO_MODEL: Record<string, ModelId> = {
+    "NOAA GEFS": "NOAA GEFS",
+    "NOAA HRRR": "NOAA HRRR",
+    "ECMWF IFS ENS": "ECMWF IFS ENS",
+    "ECMWF AIFS Single": "ECMWF AIFS",
+  };
 
-  console.log(`Filtered to ${filtered.length} relevant rows`);
-
-  // Group by station
+  // Filter and group by station in a single pass
   type StationMetrics = Record<string, Record<string, Record<string, number>>>; // model → variable → leadHours → value
   const stationMetrics = new Map<string, StationMetrics>();
+  let filteredCount = 0;
 
-  for (const r of filtered) {
+  for (const r of rows) {
+    const modelId = PARQUET_TO_MODEL[r.model];
+    if (modelId === undefined) continue;
+    const expectedMetric = VARIABLE_METRICS[r.variable];
+    if (!expectedMetric || r.metric !== expectedMetric) continue;
+    // Check window (allow some tolerance for different representations)
+    if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) continue;
+    if (!isFinite(r.value) || r.value <= 0) continue;
+
     const hourBin = leadTimeToHourBin(r.lead_time);
     if (hourBin === undefined) continue;
 
+    filteredCount++;
     let sm = stationMetrics.get(r.station_id);
     if (!sm) {
       sm = {};
       stationMetrics.set(r.station_id, sm);
     }
-    if (!sm[r.model]) sm[r.model] = {};
-    if (!sm[r.model]![r.variable]) sm[r.model]![r.variable] = {};
-    sm[r.model]![r.variable]![String(hourBin)] = r.value;
+    if (!sm[modelId]) sm[modelId] = {};
+    if (!sm[modelId]![r.variable]) sm[modelId]![r.variable] = {};
+    sm[modelId]![r.variable]![String(hourBin)] = r.value;
   }
+
+  console.log(`Filtered to ${filteredCount} relevant rows`);
 
   console.log(`${stationMetrics.size} stations have relevant metrics`);
 
