@@ -246,6 +246,8 @@ function chartOptsForVariable(variable: ForecastVariable): {
   convertValue?: (v: number) => number;
   formatValue: (v: number) => string;
   intensityBands?: IntensityBand[];
+  yClampMin?: number;
+  yClampMax?: number;
 } {
   const imperial = getUnitSystem() === "imperial";
   switch (variable) {
@@ -273,6 +275,7 @@ function chartOptsForVariable(variable: ForecastVariable): {
         color: "#81c784",
         convertValue: imperial ? msToMph : undefined,
         formatValue: (v) => v.toFixed(0),
+        yClampMin: 0,
       };
     case "cloudCover":
       return {
@@ -280,6 +283,8 @@ function chartOptsForVariable(variable: ForecastVariable): {
         unit: "",
         color: "#b0bec5",
         formatValue: (v) => `${(v * 100).toFixed(0)}%`,
+        yClampMin: 0,
+        yClampMax: 1,
       };
   }
 }

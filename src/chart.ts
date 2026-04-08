@@ -33,6 +33,10 @@ interface ChartOptions {
   latitude?: number;
   /** Location longitude for sunrise/sunset markers */
   longitude?: number;
+  /** Clamp computed y-axis minimum (after padding) to this floor */
+  yClampMin?: number;
+  /** Clamp computed y-axis maximum (after padding) to this ceiling */
+  yClampMax?: number;
 }
 
 interface ChartState {
@@ -452,6 +456,8 @@ export function renderChart(opts: ChartOptions): void {
     timeRange,
     latitude,
     longitude,
+    yClampMin,
+    yClampMax,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -513,6 +519,9 @@ export function renderChart(opts: ChartOptions): void {
       yMax = Math.max(yMax, bandCeiling);
     }
   }
+
+  if (yClampMin !== undefined) yMin = Math.max(yMin, yClampMin);
+  if (yClampMax !== undefined) yMax = Math.min(yMax, yClampMax);
 
   const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
   const xTimeSpan = xMaxMs - xMinMs || 1;
