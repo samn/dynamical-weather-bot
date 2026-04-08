@@ -25,8 +25,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(__dirname, "..", "src", "generated");
 const OUT_PATH = join(OUT_DIR, "accuracy-grid.json");
 
-const STATS_URL = "https://sa.dynamical.org/statistics.parquet";
-const STATIONS_URL = "https://sa.dynamical.org/stations.csv";
+const STATS_URL = "https://assets.dynamical.org/scorecard/statistics.parquet";
+const STATIONS_URL = "https://assets.dynamical.org/scorecard/stations.csv";
 
 /** 90-day window in nanoseconds (dynamical uses int64 nanoseconds) */
 const WINDOW_90D = 7776000000000000;
@@ -40,22 +40,31 @@ const MAX_RADIUS_KM = 75;
 /** Minimum distance cap for IDW to avoid division issues */
 const MIN_DISTANCE_KM = 10;
 
-/** Variables of interest and their metrics in preference order (bias-corrected first).
- *  See dynamical-org/scorecard#29 — bias correction removes systematic grid-to-station
- *  spatial offsets, giving more accurate skill estimates for model weighting. */
+/** Variables of interest and their skill metrics in preference order.
+ *  CRPS (Continuous Ranked Probability Score) is preferred for ensemble weighting
+ *  because it evaluates the full forecast distribution, not just the mean.
+ *  Bias-corrected variants remove systematic grid-to-station spatial offsets. */
 const VARIABLE_METRICS: Record<string, string[]> = {
-  temperature_2m: ["RMSE_bc", "RMSE"],
-  precipitation_surface: ["MAE_bc", "MAE"],
+  temperature_2m: ["CRPS_bc", "RMSE_bc", "CRPS", "RMSE"],
+  precipitation_surface: ["CRPS", "MAE_bc", "MAE"],
+};
+
+/** Bias metrics in preference order (for debiasing during blending) */
+const BIAS_METRICS: Record<string, string[]> = {
+  temperature_2m: ["Bias_bc", "Bias"],
+  precipitation_surface: ["Bias"],
 };
 
 interface GridCell {
   stationCount: number;
   metrics: Record<string, Record<string, Record<string, number>>>;
+  biases?: Record<string, Record<string, Record<string, number>>>;
   nearbyStations?: Array<{
     id: string;
     latitude: number;
     longitude: number;
     metrics: Record<string, Record<string, Record<string, number>>>;
+    biases?: Record<string, Record<string, Record<string, number>>>;
   }>;
 }
 
@@ -104,43 +113,71 @@ async function main() {
 
   type StationMetrics = Record<string, Record<string, Record<string, number>>>; // model → variable → leadHours → value
   const stationMetrics = new Map<string, StationMetrics>();
+  const stationBiases = new Map<string, StationMetrics>();
   const storedPriority = new Map<string, number>();
+  const storedBiasPriority = new Map<string, number>();
   let uniqueCount = 0;
   let bcCount = 0;
 
   for (const r of rows) {
     const modelId = PARQUET_TO_MODEL[r.model];
     if (modelId === undefined) continue;
-    const acceptedMetrics = VARIABLE_METRICS[r.variable];
-    if (!acceptedMetrics) continue;
-    const metricPriority = acceptedMetrics.indexOf(r.metric);
-    if (metricPriority < 0) continue;
     // Check window (allow some tolerance for different representations)
     if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) continue;
-    if (!isFinite(r.value) || r.value <= 0) continue;
+    if (!isFinite(r.value)) continue;
 
     const hourBin = leadTimeToHourBin(r.lead_time);
     if (hourBin === undefined) continue;
 
-    const priorityKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}`;
-    const existing = storedPriority.get(priorityKey);
-    if (existing !== undefined && existing <= metricPriority) continue;
+    // Collect skill metrics (CRPS_bc, RMSE_bc, etc.)
+    const acceptedMetrics = VARIABLE_METRICS[r.variable];
+    if (acceptedMetrics) {
+      const metricPriority = acceptedMetrics.indexOf(r.metric);
+      if (metricPriority >= 0 && r.value > 0) {
+        const priorityKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}`;
+        const existing = storedPriority.get(priorityKey);
+        if (existing === undefined || metricPriority < existing) {
+          if (existing === undefined) uniqueCount++;
+          if (metricPriority === 0) bcCount++;
+          storedPriority.set(priorityKey, metricPriority);
 
-    if (existing === undefined) uniqueCount++;
-    if (metricPriority === 0) bcCount++;
-    storedPriority.set(priorityKey, metricPriority);
-
-    let sm = stationMetrics.get(r.station_id);
-    if (!sm) {
-      sm = {};
-      stationMetrics.set(r.station_id, sm);
+          let sm = stationMetrics.get(r.station_id);
+          if (!sm) {
+            sm = {};
+            stationMetrics.set(r.station_id, sm);
+          }
+          if (!sm[modelId]) sm[modelId] = {};
+          if (!sm[modelId]![r.variable]) sm[modelId]![r.variable] = {};
+          sm[modelId]![r.variable]![String(hourBin)] = r.value;
+        }
+      }
     }
-    if (!sm[modelId]) sm[modelId] = {};
-    if (!sm[modelId]![r.variable]) sm[modelId]![r.variable] = {};
-    sm[modelId]![r.variable]![String(hourBin)] = r.value;
+
+    // Collect bias metrics separately (Bias_bc, Bias — can be negative)
+    const acceptedBias = BIAS_METRICS[r.variable];
+    if (acceptedBias) {
+      const biasPriority = acceptedBias.indexOf(r.metric);
+      if (biasPriority >= 0) {
+        const biasKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}|bias`;
+        const existingBias = storedBiasPriority.get(biasKey);
+        if (existingBias === undefined || biasPriority < existingBias) {
+          storedBiasPriority.set(biasKey, biasPriority);
+
+          let sb = stationBiases.get(r.station_id);
+          if (!sb) {
+            sb = {};
+            stationBiases.set(r.station_id, sb);
+          }
+          if (!sb[modelId]) sb[modelId] = {};
+          if (!sb[modelId]![r.variable]) sb[modelId]![r.variable] = {};
+          sb[modelId]![r.variable]![String(hourBin)] = r.value;
+        }
+      }
+    }
   }
 
   console.log(`${uniqueCount} unique station/model/variable/lead combinations (${bcCount} bias-corrected)`);
+  console.log(`${stationBiases.size} stations have bias data`);
 
   console.log(`${stationMetrics.size} stations have relevant metrics`);
 
@@ -148,7 +185,7 @@ async function main() {
   const cells: Record<string, GridCell> = {};
 
   // Precompute CONUS stations with positions
-  const conusStations: Array<{ station: Station; metrics: StationMetrics }> = [];
+  const conusStations: Array<{ station: Station; metrics: StationMetrics; biases: StationMetrics }> = [];
   for (const [id, metrics] of stationMetrics) {
     const station = stations.get(id);
     if (!station) continue;
@@ -159,7 +196,7 @@ async function main() {
       station.longitude > BOUNDS.maxLon
     )
       continue;
-    conusStations.push({ station, metrics });
+    conusStations.push({ station, metrics, biases: stationBiases.get(id) ?? {} });
   }
 
   console.log(`${conusStations.length} CONUS stations with metrics`);
@@ -172,63 +209,87 @@ async function main() {
       const centerLon = cellLon + GRID_RES / 2;
 
       // Find nearby stations within radius
-      const nearby: Array<{ station: Station; distance: number; metrics: StationMetrics }> = [];
+      const nearby: Array<{ station: Station; distance: number; metrics: StationMetrics; biases: StationMetrics }> = [];
       for (const s of conusStations) {
         const d = haversineKm(centerLat, centerLon, s.station.latitude, s.station.longitude);
         if (d <= MAX_RADIUS_KM) {
-          nearby.push({ station: s.station, distance: d, metrics: s.metrics });
+          nearby.push({ station: s.station, distance: d, metrics: s.metrics, biases: s.biases });
         }
       }
 
       if (nearby.length === 0) continue;
 
-      // IDW-weighted average of metrics
-      const cellMetrics: Record<string, Record<string, Record<string, number>>> = {};
-      const weightSums: Record<string, Record<string, Record<string, number>>> = {};
+      // IDW helper: accumulates weighted sums across stations
+      function idwAccumulate(
+        stationData: StationMetrics[],
+        distances: number[],
+      ): Record<string, Record<string, Record<string, number>>> {
+        const accumulated: Record<string, Record<string, Record<string, number>>> = {};
+        const wSums: Record<string, Record<string, Record<string, number>>> = {};
 
-      for (const n of nearby) {
-        const w = 1 / Math.pow(Math.max(n.distance, MIN_DISTANCE_KM), 2);
-        for (const [model, vars] of Object.entries(n.metrics)) {
-          if (!cellMetrics[model]) cellMetrics[model] = {};
-          if (!weightSums[model]) weightSums[model] = {};
+        for (let i = 0; i < stationData.length; i++) {
+          const data = stationData[i]!;
+          const w = 1 / Math.pow(Math.max(distances[i]!, MIN_DISTANCE_KM), 2);
+          for (const [model, vars] of Object.entries(data)) {
+            if (!accumulated[model]) accumulated[model] = {};
+            if (!wSums[model]) wSums[model] = {};
+            for (const [varName, leads] of Object.entries(vars)) {
+              if (!accumulated[model]![varName]) accumulated[model]![varName] = {};
+              if (!wSums[model]![varName]) wSums[model]![varName] = {};
+              for (const [lead, val] of Object.entries(leads)) {
+                accumulated[model]![varName]![lead] = (accumulated[model]![varName]![lead] ?? 0) + w * val;
+                wSums[model]![varName]![lead] = (wSums[model]![varName]![lead] ?? 0) + w;
+              }
+            }
+          }
+        }
+
+        // Normalize
+        for (const [model, vars] of Object.entries(accumulated)) {
           for (const [varName, leads] of Object.entries(vars)) {
-            if (!cellMetrics[model]![varName]) cellMetrics[model]![varName] = {};
-            if (!weightSums[model]![varName]) weightSums[model]![varName] = {};
-            for (const [lead, val] of Object.entries(leads)) {
-              cellMetrics[model]![varName]![lead] = (cellMetrics[model]![varName]![lead] ?? 0) + w * val;
-              weightSums[model]![varName]![lead] = (weightSums[model]![varName]![lead] ?? 0) + w;
+            for (const lead of Object.keys(leads)) {
+              const ws = wSums[model]?.[varName]?.[lead];
+              if (ws && ws > 0) {
+                accumulated[model]![varName]![lead] =
+                  Math.round((accumulated[model]![varName]![lead]! / ws) * 1000) / 1000;
+              }
             }
           }
         }
+        return accumulated;
       }
 
-      // Normalize by weight sums
-      for (const [model, vars] of Object.entries(cellMetrics)) {
-        for (const [varName, leads] of Object.entries(vars)) {
-          for (const lead of Object.keys(leads)) {
-            const ws = weightSums[model]?.[varName]?.[lead];
-            if (ws && ws > 0) {
-              cellMetrics[model]![varName]![lead] = Math.round((cellMetrics[model]![varName]![lead]! / ws) * 1000) / 1000;
-            }
-          }
-        }
-      }
+      const distances = nearby.map((n) => n.distance);
+      const cellMetrics = idwAccumulate(
+        nearby.map((n) => n.metrics),
+        distances,
+      );
+      const cellBiases = idwAccumulate(
+        nearby.map((n) => n.biases),
+        distances,
+      );
 
       const key = `${cellLat.toFixed(1)},${cellLon.toFixed(1)}`;
+      const hasBiases = Object.keys(cellBiases).length > 0;
       const cell: GridCell = {
         stationCount: nearby.length,
         metrics: cellMetrics,
+        ...(hasBiases ? { biases: cellBiases } : {}),
       };
 
       // For cells with enough stations, store the nearest with their coordinates
       if (nearby.length >= 3) {
         nearby.sort((a, b) => a.distance - b.distance);
-        cell.nearbyStations = nearby.slice(0, 10).map((n) => ({
-          id: n.station.id,
-          latitude: n.station.latitude,
-          longitude: n.station.longitude,
-          metrics: n.metrics,
-        }));
+        cell.nearbyStations = nearby.slice(0, 10).map((n) => {
+          const hasBias = Object.keys(n.biases).length > 0;
+          return {
+            id: n.station.id,
+            latitude: n.station.latitude,
+            longitude: n.station.longitude,
+            metrics: n.metrics,
+            ...(hasBias ? { biases: n.biases } : {}),
+          };
+        });
       }
 
       cells[key] = cell;
