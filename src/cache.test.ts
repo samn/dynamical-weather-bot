@@ -137,21 +137,23 @@ describe("setCache / getCached", () => {
   });
 
   it("is still fresh at exactly the 1-hour boundary", () => {
+    vi.useFakeTimers();
+    const now = Date.now();
     setCache(40, -74, mockForecast, mockRecent);
 
-    vi.useFakeTimers();
     // At exactly 1 hour — not yet expired (uses > not >=)
-    vi.setSystemTime(Date.now() + 60 * 60 * 1000);
+    vi.setSystemTime(now + 60 * 60 * 1000);
     expect(getCached(40, -74)).not.toBeNull();
 
     vi.useRealTimers();
   });
 
   it("expires 1ms past the 1-hour boundary", () => {
+    vi.useFakeTimers();
+    const now = Date.now();
     setCache(40, -74, mockForecast, mockRecent);
 
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.now() + 60 * 60 * 1000 + 1);
+    vi.setSystemTime(now + 60 * 60 * 1000 + 1);
     expect(getCached(40, -74)).toBeNull();
 
     vi.useRealTimers();
