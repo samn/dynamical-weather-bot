@@ -546,6 +546,13 @@ export function renderChart(opts: ChartOptions): void {
     }
   }
 
+  // Clip data rendering to the chart area so lines/bands don't overflow
+  // past the y-axis range (e.g. when clamped to [0, 100%] or >= 0).
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
+  ctx.clip();
+
   // Draw min-max band
   ctx.fillStyle = hexToRgba(color, 0.08);
   ctx.beginPath();
@@ -587,6 +594,8 @@ export function renderChart(opts: ChartOptions): void {
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
+
+  ctx.restore(); // remove data clip
 
   // Draw axes
   ctx.strokeStyle = "#2a2d3a";
