@@ -776,6 +776,14 @@ zipForm.addEventListener("submit", async (e) => {
   }
 });
 
+// Auto-submit when a valid 5-digit zip code is entered
+zipInput.addEventListener("input", () => {
+  const value = zipInput.value.trim();
+  if (/^\d{5}$/.test(value)) {
+    zipForm.requestSubmit();
+  }
+});
+
 // Unit toggle
 function syncUnitToggle(): void {
   const system = getUnitSystem();

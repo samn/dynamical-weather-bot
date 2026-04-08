@@ -168,7 +168,6 @@ test.describe("page load and initial state", () => {
 
     // Trigger a load to reveal the meta bar
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
     await expect(page.locator("#metric-btn")).toBeVisible();
     await expect(page.locator("#imperial-btn")).toBeVisible();
@@ -225,7 +224,6 @@ test.describe("ZIP code input", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     // Skeleton charts should appear (forecast container visible with loading canvases).
     // Zarr requests are delayed so the loading state persists long enough to observe.
@@ -238,7 +236,6 @@ test.describe("ZIP code input", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "00000");
-    await page.click('#zip-form button[type="submit"]');
 
     // Wait for the error to appear
     await expect(page.locator("#error")).not.toHaveClass(/hidden/, {
@@ -274,7 +271,6 @@ test.describe("ZIP code input", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     // During loading, buttons should be disabled
     await expect(page.locator("#geolocate-btn")).toBeDisabled();
@@ -290,7 +286,6 @@ test.describe("unit toggle", () => {
 
     // Trigger a load to reveal the unit toggle
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     await page.click("#metric-btn");
@@ -308,7 +303,6 @@ test.describe("unit toggle", () => {
 
     // Trigger a load to reveal the unit toggle
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     await page.click("#metric-btn");
@@ -325,7 +319,6 @@ test.describe("unit toggle", () => {
 
     // Trigger a load to reveal the unit toggle
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     // Switch to metric
@@ -373,7 +366,6 @@ test.describe("forecast display with mocked data", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     // The location label should show coordinates (even though the forecast
     // will fail due to blocked Zarr requests, the ZIP lookup succeeds first)
@@ -403,7 +395,6 @@ test.describe("forecast display with mocked data", () => {
 
     // Submit a valid ZIP but Zarr will fail (blocked)
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     // Wait for error to appear
     await expect(page.locator("#error")).not.toHaveClass(/hidden/, {
@@ -422,7 +413,6 @@ test.describe("forecast display with mocked data", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     await expect(page.locator("#error")).not.toHaveClass(/hidden/, {
       timeout: 15000,
@@ -580,7 +570,6 @@ test.describe("location display and reset", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     // Location bar should be hidden, location display should show
     await expect(page.locator("#location-bar")).toHaveClass(/hidden/);
@@ -595,7 +584,6 @@ test.describe("location display and reset", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
     const label = await page.locator("#location-label").textContent();
@@ -611,7 +599,6 @@ test.describe("location display and reset", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
 
     // Click the globe reset button
@@ -631,7 +618,6 @@ test.describe("location display and reset", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
 
     // Click reset then back
@@ -664,7 +650,6 @@ test.describe("unit toggle as text", () => {
 
     // Trigger a load to reveal the meta bar
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
     await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
 
     // Default is imperial
