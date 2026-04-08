@@ -298,7 +298,6 @@ test.describe("model controls with cached forecast", () => {
 
     // Submit ZIP to trigger loadForecast with cached data
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     // Forecast should render from cache
     await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
@@ -318,7 +317,6 @@ test.describe("model controls with cached forecast", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
     await expect(page.locator("#model-gefs")).toBeChecked();
@@ -336,7 +334,6 @@ test.describe("model controls with cached forecast", () => {
     await page.goto("/");
 
     await page.fill("#zip-input", "10001");
-    await page.click('#zip-form button[type="submit"]');
 
     await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
     await expect(page.locator("#magic-blend-btn")).toBeVisible();
