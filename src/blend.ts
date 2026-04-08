@@ -2,7 +2,6 @@ import type {
   ModelId,
   ModelForecast,
   AccuracyGrid,
-  NearbyStation,
   ForecastData,
   ForecastPoint,
   ForecastVariable,
@@ -15,6 +14,19 @@ const MAX_STATION_RADIUS_KM = 50;
 
 /** Minimum distance cap (km) to avoid division-by-zero in IDW */
 const MIN_STATION_DISTANCE_KM = 1;
+
+/**
+ * Regularization strength: blends accuracy-based weights toward equal weights.
+ * 0 = pure accuracy weighting, 1 = equal weights.
+ * Prevents overfitting to noisy error estimates at stations with limited data.
+ */
+const REGULARIZATION_STRENGTH = 0.15;
+
+/**
+ * Standard lead time bins available in the accuracy grid (hours).
+ * Used for interpolation between bins.
+ */
+const LEAD_BINS = [0, 24, 48, 72];
 
 /**
  * Look up accuracy metrics for a location from the grid.
@@ -48,20 +60,58 @@ export function lookupAccuracy(
     return cell.metrics;
   }
 
+  return blendStationMetrics(
+    withDistance.map((s) => ({ metrics: s.station.metrics, distance: s.distance })),
+  );
+}
+
+/**
+ * Look up per-model bias values for a location from the grid.
+ * Returns bias data (model → variable → lead → bias), or undefined if unavailable.
+ */
+export function lookupBiases(
+  location: LatLon,
+  grid: AccuracyGrid,
+): Record<string, Record<string, Record<string, number>>> | undefined {
+  const cellLat = Math.floor(location.latitude / grid.gridResolution) * grid.gridResolution;
+  const cellLon = Math.floor(location.longitude / grid.gridResolution) * grid.gridResolution;
+  const key = `${cellLat.toFixed(1)},${cellLon.toFixed(1)}`;
+  const cell = grid.cells[key];
+  if (!cell?.biases) return undefined;
+
+  if (!cell.nearbyStations || cell.nearbyStations.length === 0) {
+    return cell.biases;
+  }
+
+  const withDistance = cell.nearbyStations
+    .filter((s) => s.biases !== undefined)
+    .map((s) => ({
+      metrics: s.biases!,
+      distance: haversineKm(location.latitude, location.longitude, s.latitude, s.longitude),
+    }))
+    .filter((s) => s.distance <= MAX_STATION_RADIUS_KM);
+
+  if (withDistance.length === 0) {
+    return cell.biases;
+  }
+
   return blendStationMetrics(withDistance);
 }
 
 /** IDW-blend metrics across multiple stations weighted by distance from user */
 function blendStationMetrics(
-  stations: Array<{ station: NearbyStation; distance: number }>,
+  stations: Array<{
+    metrics: Record<string, Record<string, Record<string, number>>>;
+    distance: number;
+  }>,
 ): Record<string, Record<string, Record<string, number>>> {
   const result: Record<string, Record<string, Record<string, number>>> = {};
   const weightSums: Record<string, Record<string, Record<string, number>>> = {};
 
-  for (const { station, distance } of stations) {
+  for (const { metrics, distance } of stations) {
     const w = 1 / Math.pow(Math.max(distance, MIN_STATION_DISTANCE_KM), 2);
 
-    for (const [model, vars] of Object.entries(station.metrics)) {
+    for (const [model, vars] of Object.entries(metrics)) {
       if (!result[model]) result[model] = {};
       if (!weightSums[model]) weightSums[model] = {};
 
@@ -93,8 +143,56 @@ function blendStationMetrics(
 }
 
 /**
+ * Interpolate an error metric between the two nearest lead time bins.
+ * Falls back to the nearest available bin if only one side is available.
+ */
+function interpolateError(
+  hours: number,
+  modelAccuracy: Record<string, Record<string, number>> | undefined,
+  variable: string,
+): number | undefined {
+  const varData = modelAccuracy?.[variable];
+  if (!varData) return undefined;
+
+  // Find the two surrounding bins
+  let lower: number | undefined;
+  let upper: number | undefined;
+  for (const b of LEAD_BINS) {
+    if (b <= hours) lower = b;
+    if (b >= hours && upper === undefined) upper = b;
+  }
+
+  if (lower === undefined && upper === undefined) return undefined;
+
+  const lowerVal = lower !== undefined ? varData[String(lower)] : undefined;
+  const upperVal = upper !== undefined ? varData[String(upper)] : undefined;
+
+  if (lowerVal === undefined && upperVal === undefined) return undefined;
+  if (lowerVal === undefined) return upperVal;
+  if (upperVal === undefined) return lowerVal;
+  if (lower === upper) return lowerVal;
+
+  // Linear interpolation
+  const t = (hours - lower!) / (upper! - lower!);
+  return lowerVal + t * (upperVal - lowerVal);
+}
+
+/**
+ * Interpolate a bias value between the two nearest lead time bins.
+ */
+function interpolateBias(
+  hours: number,
+  modelBiases: Record<string, Record<string, number>> | undefined,
+  variable: string,
+): number {
+  if (!modelBiases) return 0;
+  const val = interpolateError(hours, modelBiases, variable);
+  return val ?? 0;
+}
+
+/**
  * Compute accuracy-based weights for a set of models at a given variable and lead time.
- * Weight = 1 / error², normalized to sum to 1.
+ * Weight = 1 / error², normalized to sum to 1, then regularized toward equal weights.
  */
 export function computeWeights(
   models: ModelId[],
@@ -111,14 +209,11 @@ export function computeWeights(
     return weights;
   }
 
-  // Find the nearest lead time bin
-  const leadKey = String(findNearestLeadBin(leadTimeHours));
-
   let totalWeight = 0;
   const rawWeights: Array<[ModelId, number]> = [];
 
   for (const model of models) {
-    const error = accuracy[model]?.[variable]?.[leadKey];
+    const error = interpolateError(leadTimeHours, accuracy[model], variable);
     if (error !== undefined && error > 0) {
       const w = 1 / (error * error);
       rawWeights.push([model, w]);
@@ -143,30 +238,29 @@ export function computeWeights(
     if (!weights.has(m)) weights.set(m, 0);
   }
 
+  // Regularize toward equal weights to reduce noise from limited station data
+  if (REGULARIZATION_STRENGTH > 0 && weights.size > 1) {
+    const modelsWithWeight = rawWeights.length;
+    if (modelsWithWeight > 1) {
+      const equalW = 1 / modelsWithWeight;
+      for (const [model, w] of rawWeights) {
+        weights.set(
+          model,
+          (1 - REGULARIZATION_STRENGTH) * (w / totalWeight) + REGULARIZATION_STRENGTH * equalW,
+        );
+      }
+    }
+  }
+
   return weights;
 }
 
-/** Find the nearest standard lead time bin (0, 24, 48) */
-function findNearestLeadBin(hours: number): number {
-  const bins = [0, 24, 48];
-  let best = bins[0]!;
-  let bestDist = Math.abs(hours - best);
-  for (const b of bins) {
-    const d = Math.abs(hours - b);
-    if (d < bestDist) {
-      best = b;
-      bestDist = d;
-    }
-  }
-  return best;
-}
-
-/** Variable names used in accuracy grid */
+/** Variable names used in accuracy grid — use actual metric per variable */
 const VARIABLE_KEYS: Record<string, string> = {
   temperature: "temperature_2m",
   precipitation: "precipitation_surface",
-  windSpeed: "temperature_2m", // use temperature accuracy as proxy for wind
-  cloudCover: "temperature_2m", // use temperature accuracy as proxy for cloud
+  windSpeed: "temperature_2m", // proxy: wind metrics not yet in scorecard
+  cloudCover: "temperature_2m", // proxy: cloud metrics not yet in scorecard
 };
 
 /** Input for blending a single variable from one model */
@@ -198,7 +292,7 @@ export function computeCommonTimeRange(inputs: ModelVariableInput[]): [number, n
  * Blend multiple model forecasts using accuracy-weighted averaging.
  *
  * Strategy:
- * - Blended median = weighted average of all model medians
+ * - Blended median = weighted average of bias-corrected model medians
  * - Uncertainty bands = weighted average of ensemble models' bands, shifted to center on blended median
  * - Beyond shorter models' ranges, remaining models pass through
  */
@@ -208,6 +302,7 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
 
   const base = ensembleModels[0]!;
   const accuracy = lookupAccuracy(base.location, grid);
+  const biases = lookupBiases(base.location, grid);
   const latestInitTime = forecasts.reduce(
     (latest, f) => (f.initTime > latest ? f.initTime : latest),
     forecasts[0]!.initTime,
@@ -221,7 +316,7 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
       points: f[varKey],
       isEnsemble: f.isEnsemble,
     }));
-    result[varKey] = blendVariable(varKey, inputs, accuracy, CLAMP_MIN[varKey]);
+    result[varKey] = blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey]);
   }
 
   return {
@@ -255,7 +350,8 @@ export function blendSingleVariable(
   if (inputs.length === 0) return [];
   if (inputs.length === 1) return inputs[0]!.points;
   const accuracy = useAccuracy ? lookupAccuracy(location, grid) : undefined;
-  return blendVariable(varKey, inputs, accuracy, CLAMP_MIN[varKey]);
+  const biases = useAccuracy ? lookupBiases(location, grid) : undefined;
+  return blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey]);
 }
 
 /**
@@ -263,15 +359,17 @@ export function blendSingleVariable(
  *
  * For each timestep:
  * 1. Collect matching points from all models (by rounded hoursFromNow)
- * 2. Compute accuracy weights for available models
- * 3. Blended median = weighted average of all model medians
- * 4. Blended bands = weighted average of ensemble models' bands,
+ * 2. Compute accuracy weights with lead-time interpolation and regularization
+ * 3. Subtract per-model bias before blending (bias correction)
+ * 4. Blended median = weighted average of bias-corrected model medians
+ * 5. Blended bands = weighted average of ensemble models' bands,
  *    shifted so center aligns with blended median
  */
 function blendVariable(
   varKey: string,
   inputs: ModelVariableInput[],
   accuracy: Record<string, Record<string, Record<string, number>>> | undefined,
+  biases: Record<string, Record<string, Record<string, number>>> | undefined,
   clampMin?: number,
 ): ForecastPoint[] {
   const accuracyVarKey = VARIABLE_KEYS[varKey] ?? "temperature_2m";
@@ -304,7 +402,7 @@ function blendVariable(
 
     if (available.length <= 1) return basePt;
 
-    // Compute weights for all available models
+    // Compute weights with lead-time interpolation and regularization
     const weights = computeWeights(
       available.map((a) => a.model),
       accuracyVarKey,
@@ -312,10 +410,20 @@ function blendVariable(
       accuracy,
     );
 
-    // Blended median from ALL models
+    // Compute per-model bias corrections
+    const modelBias = new Map<ModelId, number>();
+    for (const { model } of available) {
+      const bias = biases
+        ? interpolateBias(Math.max(0, basePt.hoursFromNow), biases[model], accuracyVarKey)
+        : 0;
+      modelBias.set(model, bias);
+    }
+
+    // Blended median from ALL models (with bias correction)
     let blendedMedian = 0;
     for (const { model, point } of available) {
-      blendedMedian += (weights.get(model) ?? 0) * point.median;
+      const bias = modelBias.get(model) ?? 0;
+      blendedMedian += (weights.get(model) ?? 0) * (point.median - bias);
     }
 
     // Blended uncertainty from ENSEMBLE models only
@@ -335,11 +443,12 @@ function blendVariable(
         ensembleWeightSum > 0
           ? (weights.get(model) ?? 0) / ensembleWeightSum
           : 1 / ensembleAvailable.length;
-      blendedP10 += w * point.p10;
-      blendedP90 += w * point.p90;
-      blendedMin += w * point.min;
-      blendedMax += w * point.max;
-      ensembleCenter += w * point.median;
+      const bias = modelBias.get(model) ?? 0;
+      blendedP10 += w * (point.p10 - bias);
+      blendedP90 += w * (point.p90 - bias);
+      blendedMin += w * (point.min - bias);
+      blendedMax += w * (point.max - bias);
+      ensembleCenter += w * (point.median - bias);
     }
 
     // Shift blended bands so they center on the blended median

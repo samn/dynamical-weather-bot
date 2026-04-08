@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { computeCommonTimeRange, computeWeights, blendForecasts, lookupAccuracy } from "./blend.js";
+import {
+  computeCommonTimeRange,
+  computeWeights,
+  blendForecasts,
+  blendSingleVariable,
+  lookupAccuracy,
+  lookupBiases,
+} from "./blend.js";
 import type { ModelForecast, AccuracyGrid, ForecastPoint, NearbyStation } from "./types.js";
 
 function makeForecastPoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
@@ -296,8 +303,80 @@ describe("lookupAccuracy", () => {
   });
 });
 
+describe("lookupBiases", () => {
+  it("returns undefined when grid has no biases", () => {
+    const result = lookupBiases(TEST_LOC, EMPTY_GRID);
+    expect(result).toBeUndefined();
+  });
+
+  it("returns cell biases when available", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 2.0 } } },
+          biases: { "NOAA GEFS": { temperature_2m: { "0": 0.5 } } },
+        },
+      },
+    };
+    const result = lookupBiases(TEST_LOC, grid);
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(0.5);
+  });
+
+  it("IDW-blends biases from nearby stations", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 2.0 } } },
+          biases: { "NOAA GEFS": { temperature_2m: { "0": 1.0 } } },
+          nearbyStations: [
+            makeStation("A", 40.245, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+            }),
+            makeStation("B", 40.29, -89.8, {
+              "NOAA GEFS": { temperature_2m: { "0": 6.0 } },
+            }),
+          ],
+        },
+      },
+    };
+    // Stations have no biases → falls back to cell biases
+    const result = lookupBiases(TEST_LOC, grid);
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBe(1.0);
+  });
+
+  it("uses station biases when available", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 2.0 } } },
+          biases: { "NOAA GEFS": { temperature_2m: { "0": 99 } } },
+          nearbyStations: [
+            {
+              ...makeStation("A", 40.245, -89.8, {
+                "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+              }),
+              biases: { "NOAA GEFS": { temperature_2m: { "0": -0.3 } } },
+            },
+          ],
+        },
+      },
+    };
+    const result = lookupBiases(TEST_LOC, grid);
+    expect(result?.["NOAA GEFS"]?.["temperature_2m"]?.["0"]).toBeCloseTo(-0.3, 3);
+  });
+});
+
 describe("computeWeights", () => {
-  it("returns inverse-squared-error weights", () => {
+  it("returns inverse-squared-error weights with regularization", () => {
     const accuracy = {
       "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
       "NOAA HRRR": { temperature_2m: { "0": 1.0 } },
@@ -305,8 +384,9 @@ describe("computeWeights", () => {
     const weights = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 0, accuracy);
 
     // GEFS weight = 1/4, HRRR weight = 1/1, normalized: GEFS = 0.2, HRRR = 0.8
-    expect(weights.get("NOAA GEFS")).toBeCloseTo(0.2, 5);
-    expect(weights.get("NOAA HRRR")).toBeCloseTo(0.8, 5);
+    // Regularized (15% toward equal = 0.5): GEFS = 0.85*0.2 + 0.15*0.5 = 0.245
+    expect(weights.get("NOAA GEFS")).toBeCloseTo(0.245, 5);
+    expect(weights.get("NOAA HRRR")).toBeCloseTo(0.755, 5);
   });
 
   it("returns equal weights when no accuracy data", () => {
@@ -324,18 +404,28 @@ describe("computeWeights", () => {
     expect(weights.get("NOAA HRRR")).toBe(0);
   });
 
-  it("snaps to nearest lead time bin", () => {
+  it("interpolates between lead time bins", () => {
     const accuracy = {
       "NOAA GEFS": { temperature_2m: { "0": 2.0, "24": 3.0 } },
       "NOAA HRRR": { temperature_2m: { "0": 1.0, "24": 1.5 } },
     };
-    // 10 hours → snaps to bin 0
-    const w0 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 10, accuracy);
-    expect(w0.get("NOAA GEFS")).toBeCloseTo(0.2, 5);
-    // 20 hours → snaps to bin 24
-    const w24 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 20, accuracy);
-    // GEFS 1/9, HRRR 1/2.25 = 4/9, total = 5/9
-    expect(w24.get("NOAA GEFS")).toBeCloseTo(1 / 9 / (1 / 9 + 4 / 9), 5);
+    // At 0 hours: GEFS error=2, HRRR error=1
+    const w0 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 0, accuracy);
+    // Raw: GEFS=0.2, HRRR=0.8; regularized: GEFS=0.245, HRRR=0.755
+    expect(w0.get("NOAA GEFS")).toBeCloseTo(0.245, 3);
+
+    // At 12 hours: interpolate between bins 0 and 24
+    // GEFS: 2 + 0.5*(3-2) = 2.5, HRRR: 1 + 0.5*(1.5-1) = 1.25
+    // Raw weights: GEFS=1/6.25, HRRR=1/1.5625, total = 0.16+0.64 = 0.8
+    const w12 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 12, accuracy);
+    const gefsErr12 = 2.5;
+    const hrrrErr12 = 1.25;
+    const gefsRaw = 1 / (gefsErr12 * gefsErr12);
+    const hrrrRaw = 1 / (hrrrErr12 * hrrrErr12);
+    const total = gefsRaw + hrrrRaw;
+    const gefsNorm = gefsRaw / total;
+    const gefsReg = 0.85 * gefsNorm + 0.15 * 0.5;
+    expect(w12.get("NOAA GEFS")).toBeCloseTo(gefsReg, 3);
   });
 
   it("ignores models with zero error (treats as no data)", () => {
@@ -358,7 +448,7 @@ describe("computeWeights", () => {
     expect(weights.get("NOAA HRRR")).toBeCloseTo(0.5, 5);
   });
 
-  it("computes weights for three models", () => {
+  it("computes weights for three models with regularization", () => {
     const accuracy = {
       "NOAA GEFS": { temperature_2m: { "0": 3.0 } },
       "NOAA HRRR": { temperature_2m: { "0": 1.0 } },
@@ -371,10 +461,12 @@ describe("computeWeights", () => {
       accuracy,
     );
     // GEFS=1/9, HRRR=1/1, ECMWF=1/4. Total = 1/9 + 1 + 1/4 = 49/36
+    // Regularized (15% toward 1/3):
     const total = 1 / 9 + 1 + 1 / 4;
-    expect(weights.get("NOAA GEFS")).toBeCloseTo(1 / 9 / total, 5);
-    expect(weights.get("NOAA HRRR")).toBeCloseTo(1 / total, 5);
-    expect(weights.get("ECMWF IFS ENS")).toBeCloseTo(1 / 4 / total, 5);
+    const eq = 1 / 3;
+    expect(weights.get("NOAA GEFS")).toBeCloseTo(0.85 * (1 / 9 / total) + 0.15 * eq, 5);
+    expect(weights.get("NOAA HRRR")).toBeCloseTo(0.85 * (1 / total) + 0.15 * eq, 5);
+    expect(weights.get("ECMWF IFS ENS")).toBeCloseTo(0.85 * (1 / 4 / total) + 0.15 * eq, 5);
   });
 });
 
@@ -413,15 +505,18 @@ describe("blendForecasts", () => {
     const pt = result.temperature[0]!;
 
     // GEFS weight = 1/9, HRRR weight = 1/1, total = 10/9
-    // GEFS normalized = 1/10, HRRR normalized = 9/10
-    const expectedMedian = (1 / 10) * 10 + (9 / 10) * 14; // = 1 + 12.6 = 13.6
-    const offset = expectedMedian - 10;
+    // Normalized: GEFS = 0.1, HRRR = 0.9
+    // Regularized: GEFS = 0.85*0.1 + 0.15*0.5 = 0.16, HRRR = 0.84
+    const gefsW = 0.85 * 0.1 + 0.15 * 0.5;
+    const hrrrW = 0.85 * 0.9 + 0.15 * 0.5;
+    const expectedMedian = gefsW * 10 + hrrrW * 14;
+    const offset = expectedMedian - 10; // ensemble center = 10 (only GEFS)
 
-    expect(pt.median).toBeCloseTo(expectedMedian, 5);
-    expect(pt.p10).toBeCloseTo(7 + offset, 5);
-    expect(pt.p90).toBeCloseTo(13 + offset, 5);
-    expect(pt.min).toBeCloseTo(5 + offset, 5);
-    expect(pt.max).toBeCloseTo(15 + offset, 5);
+    expect(pt.median).toBeCloseTo(expectedMedian, 3);
+    expect(pt.p10).toBeCloseTo(7 + offset, 3);
+    expect(pt.p90).toBeCloseTo(13 + offset, 3);
+    expect(pt.min).toBeCloseTo(5 + offset, 3);
+    expect(pt.max).toBeCloseTo(15 + offset, 3);
   });
 
   it("passes through GEFS data beyond 48hr (no matching HRRR timestep)", () => {
@@ -553,18 +648,21 @@ describe("blendForecasts", () => {
     const result = blendForecasts([gefs, ecmwf, hrrr], grid);
 
     // Weights: GEFS=1/9, ECMWF=1/4, HRRR=1/1. Total = 1/9 + 1/4 + 1 = 49/36
-    // GEFS norm = (1/9)/(49/36) = 4/49 ≈ 0.0816
-    // ECMWF norm = (1/4)/(49/36) = 9/49 ≈ 0.1837
-    // HRRR norm = 1/(49/36) = 36/49 ≈ 0.7347
-    const gefsW = 1 / 9 / (1 / 9 + 1 / 4 + 1);
-    const ecmwfW = 1 / 4 / (1 / 9 + 1 / 4 + 1);
-    const hrrrW = 1 / (1 / 9 + 1 / 4 + 1);
+    // Normalized then regularized (15% toward 1/3):
+    const total = 1 / 9 + 1 / 4 + 1;
+    const eq = 1 / 3;
+    const gefsW = 0.85 * (1 / 9 / total) + 0.15 * eq;
+    const ecmwfW = 0.85 * (1 / 4 / total) + 0.15 * eq;
+    const hrrrW = 0.85 * (1 / total) + 0.15 * eq;
     const expectedMedian = gefsW * 10 + ecmwfW * 12 + hrrrW * 14;
     expect(result.temperature[0]!.median).toBeCloseTo(expectedMedian, 3);
 
     // Ensemble weights (renormalized): GEFS and ECMWF only
-    const ensGefsW = 1 / 9 / (1 / 9 + 1 / 4);
-    const ensEcmwfW = 1 / 4 / (1 / 9 + 1 / 4);
+    const ensGefsRaw = gefsW;
+    const ensEcmwfRaw = ecmwfW;
+    const ensTotal = ensGefsRaw + ensEcmwfRaw;
+    const ensGefsW = ensGefsRaw / ensTotal;
+    const ensEcmwfW = ensEcmwfRaw / ensTotal;
     const ensP10 = ensGefsW * 7 + ensEcmwfW * 9;
     const ensP90 = ensGefsW * 13 + ensEcmwfW * 15;
     const ensCenter = ensGefsW * 10 + ensEcmwfW * 12;
@@ -580,6 +678,121 @@ describe("blendForecasts", () => {
     expect(result.temperature[0]!.median).toBe(15);
     expect(result.temperature[0]!.p10).toBe(12);
     expect(result.temperature[0]!.p90).toBe(18);
+  });
+
+  it("applies bias correction when grid has bias data", () => {
+    // GEFS has +2°C warm bias, HRRR has -1°C cold bias
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 2.0 } },
+          },
+          biases: {
+            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": -1.0 } },
+          },
+        },
+      },
+    };
+    // Equal accuracy → equal weights (after regularization, still equal since errors are same)
+    // GEFS median=20, HRRR median=10
+    // Bias-corrected: GEFS=20-2=18, HRRR=10-(-1)=11
+    // Equal blend: (18+11)/2 = 14.5
+    const gefs = makeGefs([{ median: 20, p10: 18, p90: 22, min: 16, max: 24, hoursFromNow: 0 }]);
+    const hrrr = makeHrrr([{ median: 10, p10: 10, p90: 10, min: 10, max: 10, hoursFromNow: 0 }]);
+
+    const result = blendForecasts([gefs, hrrr], grid);
+    expect(result.temperature[0]!.median).toBeCloseTo(14.5, 1);
+  });
+});
+
+describe("blendSingleVariable", () => {
+  it("returns empty for empty inputs", () => {
+    const result = blendSingleVariable("temperature", [], TEST_LOC, EMPTY_GRID);
+    expect(result).toEqual([]);
+  });
+
+  it("returns points unchanged for single model", () => {
+    const points = [makeForecastPoint({ median: 15 })];
+    const inputs = [{ model: "NOAA GEFS" as const, points, isEnsemble: true }];
+    const result = blendSingleVariable("temperature", inputs, TEST_LOC, EMPTY_GRID);
+    expect(result[0]!.median).toBe(15);
+  });
+
+  it("blends two models with accuracy and bias data", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 2.0 } },
+            "ECMWF IFS ENS": { temperature_2m: { "0": 2.0 } },
+          },
+          biases: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.0 } },
+            "ECMWF IFS ENS": { temperature_2m: { "0": -1.0 } },
+          },
+        },
+      },
+    };
+    const gefsPoints = [makeForecastPoint({ median: 12, p10: 10, p90: 14, hoursFromNow: 0 })];
+    const ecmwfPoints = [makeForecastPoint({ median: 8, p10: 6, p90: 10, hoursFromNow: 0 })];
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: gefsPoints, isEnsemble: true },
+      { model: "ECMWF IFS ENS" as const, points: ecmwfPoints, isEnsemble: true },
+    ];
+    const result = blendSingleVariable("temperature", inputs, TEST_LOC, grid);
+    // Equal accuracy → equal weights (after reg, still equal since errors same)
+    // Bias-corrected: GEFS=12-1=11, ECMWF=8-(-1)=9
+    // Blend: (11+9)/2 = 10
+    expect(result[0]!.median).toBeCloseTo(10, 1);
+  });
+
+  it("uses equal weights when useAccuracy is false", () => {
+    const grid = gridWithAccuracy(1.0, 3.0); // would give GEFS all weight
+    const gefsPoints = [makeForecastPoint({ median: 10, hoursFromNow: 0 })];
+    const hrrrPoints = [makeForecastPoint({ median: 20, hoursFromNow: 0 })];
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: gefsPoints, isEnsemble: true },
+      { model: "NOAA HRRR" as const, points: hrrrPoints, isEnsemble: false },
+    ];
+    const result = blendSingleVariable("temperature", inputs, TEST_LOC, grid, false);
+    // Equal weights → average = 15
+    expect(result[0]!.median).toBeCloseTo(15, 1);
+  });
+
+  it("interpolates weights at lead time 36h", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.0, "24": 2.0, "48": 3.0 } },
+            "ECMWF IFS ENS": { temperature_2m: { "0": 3.0, "24": 2.0, "48": 1.0 } },
+          },
+        },
+      },
+    };
+    const gefsPoints = [makeForecastPoint({ median: 10, p10: 8, p90: 12, hoursFromNow: 36 })];
+    const ecmwfPoints = [makeForecastPoint({ median: 20, p10: 18, p90: 22, hoursFromNow: 36 })];
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: gefsPoints, isEnsemble: true },
+      { model: "ECMWF IFS ENS" as const, points: ecmwfPoints, isEnsemble: true },
+    ];
+    const result = blendSingleVariable("temperature", inputs, TEST_LOC, grid);
+    // At 36h: interpolate between 24h and 48h (t=0.5)
+    // GEFS error: 2 + 0.5*(3-2) = 2.5, ECMWF error: 2 + 0.5*(1-2) = 1.5
+    // ECMWF should get more weight since lower error at 36h
+    expect(result[0]!.median).toBeGreaterThan(13); // closer to ECMWF=20
   });
 });
 

@@ -77,15 +77,19 @@ export interface NearbyStation {
   id: string;
   latitude: number;
   longitude: number;
-  /** model → variable → lead_hours → error metric */
+  /** model → variable → lead_hours → error metric (CRPS_bc or RMSE_bc) */
   metrics: Record<string, Record<string, Record<string, number>>>;
+  /** model → variable → lead_hours → signed bias (forecast - observed) */
+  biases?: Record<string, Record<string, Record<string, number>>>;
 }
 
 /** A single cell in the accuracy grid */
 export interface AccuracyCell {
   stationCount: number;
-  /** model → variable → lead_hours → error metric */
+  /** model → variable → lead_hours → error metric (CRPS_bc or RMSE_bc) */
   metrics: Record<string, Record<string, Record<string, number>>>;
+  /** model → variable → lead_hours → signed bias (forecast - observed) */
+  biases?: Record<string, Record<string, Record<string, number>>>;
   nearbyStations?: NearbyStation[];
 }
 
