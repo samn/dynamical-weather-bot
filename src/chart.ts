@@ -33,6 +33,10 @@ interface ChartOptions {
   latitude?: number;
   /** Location longitude for sunrise/sunset markers */
   longitude?: number;
+  /** Clamp computed y-axis minimum (after padding) to this floor */
+  yClampMin?: number;
+  /** Clamp computed y-axis maximum (after padding) to this ceiling */
+  yClampMax?: number;
 }
 
 interface ChartState {
@@ -431,6 +435,42 @@ export function stopChartSkeleton(canvas: HTMLCanvasElement): Promise<void> {
 }
 
 /**
+ * Compute the y-axis range for chart data, with optional intensity bands and clamping.
+ * Exported for testing.
+ */
+export function computeYRange(
+  data: readonly { min: number; max: number }[],
+  intensityBands?: IntensityBand[],
+  yClampMin?: number,
+  yClampMax?: number,
+): { yMin: number; yMax: number } {
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  for (const p of data) {
+    if (p.min < yMin) yMin = p.min;
+    if (p.max > yMax) yMax = p.max;
+  }
+  const yPad = (yMax - yMin) * 0.1 || 1;
+  yMin -= yPad;
+  yMax += yPad;
+
+  const hasBands = intensityBands && intensityBands.length > 0;
+  if (hasBands) {
+    yMin = 0;
+    const dataMax = Math.max(...data.map((p) => p.max));
+    const bandCeiling = intensityBands.find((b) => b.max >= dataMax)?.max;
+    if (bandCeiling !== undefined) {
+      yMax = Math.max(yMax, bandCeiling);
+    }
+  }
+
+  if (yClampMin !== undefined) yMin = Math.max(yMin, yClampMin);
+  if (yClampMax !== undefined) yMax = Math.min(yMax, yClampMax);
+
+  return { yMin, yMax };
+}
+
+/**
  * Render a probabilistic forecast chart on a canvas element.
  * Shows:
  * - P10-P90 range as a shaded band
@@ -452,6 +492,8 @@ export function renderChart(opts: ChartOptions): void {
     timeRange,
     latitude,
     longitude,
+    yClampMin,
+    yClampMax,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -491,28 +533,7 @@ export function renderChart(opts: ChartOptions): void {
   const chartWidth = displayWidth - padding.left - padding.right;
   const chartHeight = displayHeight - padding.top - padding.bottom;
 
-  // Calculate Y range with some padding
-  let yMin = Infinity;
-  let yMax = -Infinity;
-  for (const p of data) {
-    if (p.min < yMin) yMin = p.min;
-    if (p.max > yMax) yMax = p.max;
-  }
-  const yPad = (yMax - yMin) * 0.1 || 1;
-  yMin -= yPad;
-  yMax += yPad;
-
-  // When intensity bands are present, ensure yMin starts at 0 and yMax
-  // covers at least the second-to-last band boundary so labels are visible.
-  if (hasBands) {
-    yMin = 0;
-    // Find the smallest band max that is above all data
-    const dataMax = Math.max(...data.map((p) => p.max));
-    const bandCeiling = intensityBands.find((b) => b.max >= dataMax)?.max;
-    if (bandCeiling !== undefined) {
-      yMax = Math.max(yMax, bandCeiling);
-    }
-  }
+  const { yMin, yMax } = computeYRange(data, intensityBands, yClampMin, yClampMax);
 
   const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
   const xTimeSpan = xMaxMs - xMinMs || 1;
@@ -536,6 +557,13 @@ export function renderChart(opts: ChartOptions): void {
       ctx.fillRect(padding.left, y1, chartWidth, y2 - y1);
     }
   }
+
+  // Clip data rendering to the chart area so lines/bands don't overflow
+  // past the y-axis range (e.g. when clamped to [0, 100%] or >= 0).
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
+  ctx.clip();
 
   // Draw min-max band
   ctx.fillStyle = hexToRgba(color, 0.08);
@@ -578,6 +606,8 @@ export function renderChart(opts: ChartOptions): void {
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
+
+  ctx.restore(); // remove data clip
 
   // Draw axes
   ctx.strokeStyle = "#2a2d3a";

@@ -210,13 +210,14 @@ test.describe("ZIP code input", () => {
   test("submitting a valid ZIP code shows loading state", async ({
     page,
   }) => {
-    // Use delayed Zarr blocks so the skeleton loading state is observable
+    // Use a delayed Zarr abort so the loading/skeleton state persists
+    // long enough for the assertion to observe it.
     await page.route("**/data.dynamical.org/**", async (route) => {
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 2000));
       await route.abort("blockedbyclient");
     });
     await page.route("**/*.s3.us-west-2.amazonaws.com/**", async (route) => {
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 2000));
       await route.abort("blockedbyclient");
     });
     await mockZipApi(page);
@@ -225,7 +226,7 @@ test.describe("ZIP code input", () => {
     await page.fill("#zip-input", "10001");
 
     // Skeleton charts should appear (forecast container visible with loading canvases).
-    // Zarr requests are delayed so we can observe the progressive loading state.
+    // Zarr requests are delayed so the loading state persists long enough to observe.
     await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
   });
 
