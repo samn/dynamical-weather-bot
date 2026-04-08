@@ -114,7 +114,6 @@ describe("computeXLabelTimes", () => {
 const mkData = (points: { min: number; max: number }[]) => points;
 
 describe("computeYRange", () => {
-
   it("adds 10% padding above and below data range", () => {
     const data = mkData([{ min: 10, max: 20 }]);
     const { yMin, yMax } = computeYRange(data);
@@ -165,7 +164,10 @@ describe("computeYRange", () => {
   });
 
   it("wind speed: yMin is clamped to 0", () => {
-    const data = mkData([{ min: 0, max: 5 }, { min: 1, max: 8 }]);
+    const data = mkData([
+      { min: 0, max: 5 },
+      { min: 1, max: 8 },
+    ]);
     const { yMin } = computeYRange(data, undefined, 0);
     expect(yMin).toBe(0);
   });
@@ -192,9 +194,7 @@ describe("computeYRange", () => {
   });
 
   it("yClampMin applies after intensity band adjustments", () => {
-    const bands = [
-      { min: 0, max: 5, label: "Low", color: "rgba(0,0,0,0.1)" },
-    ];
+    const bands = [{ min: 0, max: 5, label: "Low", color: "rgba(0,0,0,0.1)" }];
     const data = mkData([{ min: 1, max: 3 }]);
     // Bands force yMin=0, clamp can only raise it
     const { yMin } = computeYRange(data, bands, 1);
