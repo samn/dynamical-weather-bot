@@ -477,11 +477,11 @@ function syncModelControls(): void {
   magicBlendBtn.classList.toggle("active", magic);
   equalBlendBtn.classList.toggle("active", !magic);
 
-  // Disable blend toggle when only one model is selected
+  // Dim blend toggle when only one model is selected (still clickable)
   const enabledCount = [...enabled].filter((m) => m !== "NOAA HRRR" || hrrrAvailable).length;
-  const disableBlend = enabledCount <= 1;
-  magicBlendBtn.disabled = disableBlend;
-  equalBlendBtn.disabled = disableBlend;
+  const blendInactive = enabledCount <= 1;
+  magicBlendBtn.classList.toggle("inactive", blendInactive);
+  equalBlendBtn.classList.toggle("inactive", blendInactive);
 }
 
 /**
@@ -1030,29 +1030,32 @@ setupLongPress(hrrrLabel, "NOAA HRRR");
 setupLongPress(ecmwfLabel, "ECMWF IFS ENS");
 setupLongPress(aifsLabel, "ECMWF AIFS");
 
-blendedViewBtn.addEventListener("click", () => {
-  setViewMode("blended");
+// View toggle — either button flips between blended / per-model
+function toggleViewMode(): void {
+  setViewMode(getViewMode() === "blended" ? "per-model" : "blended");
   syncModelControls();
   reblendAndRender();
-});
+}
+blendedViewBtn.addEventListener("click", toggleViewMode);
+perModelViewBtn.addEventListener("click", toggleViewMode);
 
-perModelViewBtn.addEventListener("click", () => {
-  setViewMode("per-model");
+// Blend toggle — either button flips between magic / equal.
+// When only one model is selected, first click enables all sources.
+function toggleBlendMode(): void {
+  const enabledCount = [...getEnabledModels()].filter(
+    (m) => m !== "NOAA HRRR" || hrrrAvailable,
+  ).length;
+  if (enabledCount <= 1) {
+    const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
+    setEnabledModels(new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable)));
+  } else {
+    setMagicBlend(!getMagicBlend());
+  }
   syncModelControls();
   reblendAndRender();
-});
-
-magicBlendBtn.addEventListener("click", () => {
-  setMagicBlend(true);
-  syncModelControls();
-  reblendAndRender();
-});
-
-equalBlendBtn.addEventListener("click", () => {
-  setMagicBlend(false);
-  syncModelControls();
-  reblendAndRender();
-});
+}
+magicBlendBtn.addEventListener("click", toggleBlendMode);
+equalBlendBtn.addEventListener("click", toggleBlendMode);
 
 // On load: if a zip code is in the URL, use it automatically
 const initialZip = getZipFromUrl();

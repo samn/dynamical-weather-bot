@@ -311,8 +311,11 @@ button:hover {
 
 #toggle-group {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
+  flex: 1;
 }
 
 #view-toggle {
@@ -371,17 +374,8 @@ button:hover {
   border-color: var(--accent);
 }
 
-.blend-btn:disabled {
+.blend-btn.inactive {
   opacity: 0.4;
-  cursor: default;
-}
-
-.blend-btn:disabled:hover {
-  background: var(--surface);
-}
-
-.blend-btn.active:disabled:hover {
-  background: var(--accent);
 }
 
 /* Charts */
