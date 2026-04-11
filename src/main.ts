@@ -237,12 +237,12 @@ const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
   },
 ];
 
-/** Per-model colors for the per-model (unaggregated) view */
+/** Per-model colors — Wong colorblind-safe palette (Nature Methods, 2011) */
 const MODEL_COLORS: Record<ModelId, string> = {
-  "NOAA GEFS": "#f5a623",
-  "NOAA HRRR": "#66b3ff",
-  "ECMWF IFS ENS": "#81c784",
-  "ECMWF AIFS": "#ce93d8",
+  "NOAA GEFS": "#E69F00",
+  "NOAA HRRR": "#56B4E9",
+  "ECMWF IFS ENS": "#009E73",
+  "ECMWF AIFS": "#CC79A7",
 };
 
 const MODEL_SHORT_NAMES: Record<ModelId, string> = {
@@ -983,8 +983,16 @@ function setupLongPress(label: HTMLElement, model: ModelId): void {
     longPressTriggered = false;
     timer = setTimeout(() => {
       longPressTriggered = true;
-      const enabled = new Set<ModelId>([model]);
-      setEnabledModels(enabled);
+      // Clear any text selection that started during the hold
+      window.getSelection()?.removeAllRanges();
+      const current = getEnabledModels();
+      if (current.size === 1 && current.has(model)) {
+        // Already isolated on this model — restore all sources
+        const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
+        setEnabledModels(new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable)));
+      } else {
+        setEnabledModels(new Set<ModelId>([model]));
+      }
       syncModelControls();
       reblendAndRender();
     }, 400);
