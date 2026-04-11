@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getCached, setCache } from "./cache.js";
 import type { ModelVariableInput } from "./blend.js";
-import type { ForecastData, ForecastVariable, RecentWeather } from "./types.js";
+import type { ForecastData, ForecastVariable } from "./types.js";
 
 const mockForecast: ForecastData = {
   location: { latitude: 40, longitude: -74 },
@@ -10,13 +10,6 @@ const mockForecast: ForecastData = {
   precipitation: [],
   windSpeed: [],
   cloudCover: [],
-};
-
-const mockRecent: RecentWeather = {
-  avgTemperature: 20,
-  avgPrecipitation: 0.1,
-  avgWindSpeed: 3,
-  avgCloudCover: 0.5,
 };
 
 // Stub localStorage for node environment
@@ -39,11 +32,10 @@ beforeEach(() => {
 
 describe("setCache / getCached", () => {
   it("stores and retrieves data for a location", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
     const result = getCached(40, -74);
     expect(result).not.toBeNull();
     expect(result!.forecast).toEqual(mockForecast);
-    expect(result!.recentWeather).toEqual(mockRecent);
   });
 
   it("returns null for uncached location", () => {
@@ -51,7 +43,7 @@ describe("setCache / getCached", () => {
   });
 
   it("returns null for expired entries", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 49 * 60 * 60 * 1000);
@@ -62,12 +54,12 @@ describe("setCache / getCached", () => {
   });
 
   it("evicts expired entries on write", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 49 * 60 * 60 * 1000);
 
-    setCache(50, 10, mockForecast, mockRecent);
+    setCache(50, 10, mockForecast);
 
     const raw = JSON.parse(storage.get("weather-cache")!);
     const keys = Object.keys(raw);
@@ -78,7 +70,7 @@ describe("setCache / getCached", () => {
   });
 
   it("returns fresh entries within TTL", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 50 * 60 * 1000); // 50 minutes (within 1-hour TTL)
@@ -98,7 +90,7 @@ describe("setCache / getCached", () => {
       ...mockForecast,
       initTime: "2026-03-06T18:00:00.000Z",
     };
-    setCache(40, -74, forecast, mockRecent);
+    setCache(40, -74, forecast);
     const result = getCached(40, -74);
     expect(result!.forecast.initTime).toBe("2026-03-06T18:00:00.000Z");
   });
@@ -115,8 +107,8 @@ describe("setCache / getCached", () => {
       initTime: "2026-03-07T06:00:00.000Z",
     };
 
-    setCache(40.71, -74.01, forecastNY, mockRecent);
-    setCache(34.05, -118.24, forecastLA, mockRecent);
+    setCache(40.71, -74.01, forecastNY);
+    setCache(34.05, -118.24, forecastLA);
 
     const ny = getCached(40.71, -74.01);
     const la = getCached(34.05, -118.24);
@@ -129,8 +121,8 @@ describe("setCache / getCached", () => {
     const oldForecast: ForecastData = { ...mockForecast, initTime: "2026-03-06T00:00:00.000Z" };
     const newForecast: ForecastData = { ...mockForecast, initTime: "2026-03-07T12:00:00.000Z" };
 
-    setCache(40, -74, oldForecast, mockRecent);
-    setCache(40, -74, newForecast, mockRecent);
+    setCache(40, -74, oldForecast);
+    setCache(40, -74, newForecast);
 
     const result = getCached(40, -74);
     expect(result!.forecast.initTime).toBe("2026-03-07T12:00:00.000Z");
@@ -139,7 +131,7 @@ describe("setCache / getCached", () => {
   it("is still fresh at exactly the 1-hour boundary", () => {
     vi.useFakeTimers();
     const now = Date.now();
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     // At exactly 1 hour — not yet expired (uses > not >=)
     vi.setSystemTime(now + 60 * 60 * 1000);
@@ -151,7 +143,7 @@ describe("setCache / getCached", () => {
   it("expires 1ms past the 1-hour boundary", () => {
     vi.useFakeTimers();
     const now = Date.now();
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     vi.setSystemTime(now + 60 * 60 * 1000 + 1);
     expect(getCached(40, -74)).toBeNull();
@@ -160,16 +152,16 @@ describe("setCache / getCached", () => {
   });
 
   it("keeps non-expired entries when evicting expired ones", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     vi.useFakeTimers();
     // Advance 30 minutes — first entry still fresh
     vi.setSystemTime(Date.now() + 30 * 60 * 1000);
-    setCache(50, 10, mockForecast, mockRecent);
+    setCache(50, 10, mockForecast);
 
     // Advance another 35 minutes — first entry now expired (65min total), second still fresh (35min)
     vi.setSystemTime(Date.now() + 35 * 60 * 1000);
-    setCache(60, 20, mockForecast, mockRecent);
+    setCache(60, 20, mockForecast);
 
     const raw = JSON.parse(storage.get("weather-cache")!);
     const keys = Object.keys(raw);
@@ -181,7 +173,7 @@ describe("setCache / getCached", () => {
   });
 
   it("cleans up expired entry from store on read", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 49 * 60 * 60 * 1000);
@@ -195,7 +187,7 @@ describe("setCache / getCached", () => {
   });
 
   it("rounds location keys to 2 decimal places", () => {
-    setCache(40.714, -74.006, mockForecast, mockRecent);
+    setCache(40.714, -74.006, mockForecast);
 
     const raw = JSON.parse(storage.get("weather-cache")!);
     expect(Object.keys(raw)).toEqual(["40.71,-74.01"]);
@@ -207,7 +199,7 @@ describe("setCache / getCached", () => {
   it("handles corrupted cache entry gracefully on write", () => {
     storage.set("weather-cache", "{{invalid}}");
     // Should not throw, should just create a fresh cache
-    expect(() => setCache(40, -74, mockForecast, mockRecent)).not.toThrow();
+    expect(() => setCache(40, -74, mockForecast)).not.toThrow();
     expect(getCached(40, -74)).not.toBeNull();
   });
 
@@ -229,7 +221,7 @@ describe("setCache / getCached", () => {
       { model: "ECMWF IFS ENS", points, isEnsemble: true },
     ]);
 
-    setCache(40, -74, mockForecast, mockRecent, modelInputs, false);
+    setCache(40, -74, mockForecast, modelInputs, false);
     const result = getCached(40, -74);
 
     expect(result).not.toBeNull();
@@ -240,7 +232,7 @@ describe("setCache / getCached", () => {
   });
 
   it("returns null modelInputs for legacy cache entries without per-model data", () => {
-    setCache(40, -74, mockForecast, mockRecent);
+    setCache(40, -74, mockForecast);
     const result = getCached(40, -74);
 
     expect(result).not.toBeNull();

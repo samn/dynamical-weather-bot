@@ -1,23 +1,13 @@
 import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
-import type {
-  LatLon,
-  ForecastPoint,
-  ForecastVariable,
-  ModelForecast,
-  RecentWeather,
-} from "./types.js";
+import type { LatLon, ForecastPoint, ForecastVariable, ModelForecast } from "./types.js";
 import { normalizeLongitude } from "./geo.js";
 
 const FORECAST_STORE_URL =
   "https://dynamical-noaa-gefs.s3.us-west-2.amazonaws.com/noaa-gefs-forecast-35-day/v0.2.0.icechunk/";
 
-const ANALYSIS_STORE_URL =
-  "https://dynamical-noaa-gefs.s3.us-west-2.amazonaws.com/noaa-gefs-analysis/v0.1.2.icechunk/";
-
 /** Cached IcechunkStore instances (opened once, reused across requests) */
 let forecastStorePromise: Promise<IcechunkStore> | null = null;
-let analysisStorePromise: Promise<IcechunkStore> | null = null;
 
 function getForecastStore(): Promise<IcechunkStore> {
   if (!forecastStorePromise) {
@@ -26,18 +16,8 @@ function getForecastStore(): Promise<IcechunkStore> {
   return forecastStorePromise;
 }
 
-function getAnalysisStore(): Promise<IcechunkStore> {
-  if (!analysisStorePromise) {
-    analysisStorePromise = IcechunkStore.open(ANALYSIS_STORE_URL);
-  }
-  return analysisStorePromise;
-}
-
 /** Number of 3-hourly steps to cover 72 hours */
 const STEPS_72H = 24; // 72 / 3
-
-/** Number of recent days to use for aberration comparison */
-const RECENT_DAYS = 7;
 
 /** GEFS grid resolution: 0.25 degrees */
 const GRID_RESOLUTION = 0.25;
@@ -83,12 +63,6 @@ export function precipToMmHr(kgPerM2PerS: number): number {
 /** Convert cloud cover from percent (0-100) to fraction (0-1) */
 export function cloudCoverToFraction(pct: number): number {
   return Math.max(0, Math.min(1, pct / 100));
-}
-
-/** Compute the mean of an array, ignoring non-finite values */
-function avg(arr: number[]): number {
-  const valid = arr.filter(isFinite);
-  return valid.length > 0 ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
 }
 
 /**
@@ -148,29 +122,6 @@ async function fetchForecastVariable(
 }
 
 /**
- * Fetch recent analysis data for aberration comparison.
- * Analysis dimensions: (time, latitude, longitude)
- */
-async function fetchAnalysisVariable(
-  store: IcechunkStore,
-  varName: string,
-  latIdx: number,
-  lonIdx: number,
-  startTimeIdx: number,
-  numSteps: number,
-): Promise<number[]> {
-  const arr = await zarr.open(store.resolve(varName), { kind: "array" });
-
-  const result = await zarr.get(arr, [
-    zarr.slice(startTimeIdx, startTimeIdx + numSteps),
-    latIdx,
-    lonIdx,
-  ]);
-
-  return Array.from(result.data as Float32Array);
-}
-
-/**
  * Find the index of the most recent init_time in the forecast store.
  * init_time is stored as int64 seconds since epoch.
  */
@@ -196,27 +147,6 @@ async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise
   const data = coordToNumbers(result.data);
   // Seconds -> hours
   return data.map((s) => s / 3600);
-}
-
-/**
- * Get recent analysis time indices for comparison.
- * Returns { startIdx, numSteps } for the last N days of analysis data.
- */
-async function getAnalysisTimeRange(
-  store: IcechunkStore,
-  daysBack: number,
-): Promise<{ startIdx: number; numSteps: number }> {
-  const arr = await zarr.open(store.resolve("time"), { kind: "array" });
-  const result = await zarr.get(arr);
-  const data = coordToNumbers(result.data);
-  const totalSteps = data.length;
-
-  // Analysis is 3-hourly, so N days = N * 8 steps
-  const stepsNeeded = daysBack * 8;
-  const startIdx = Math.max(0, totalSteps - stepsNeeded);
-  const numSteps = totalSteps - startIdx;
-
-  return { startIdx, numSteps };
 }
 
 /** Convert ensemble values at each time step into ForecastPoints */
@@ -370,38 +300,5 @@ export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast
     precipitation,
     windSpeed: ws,
     cloudCover,
-  };
-}
-
-/** Fetch recent weather from analysis for aberration comparison */
-export async function fetchRecentWeather(location: LatLon): Promise<RecentWeather> {
-  const latIdx = latToIndex(location.latitude);
-  const lonIdx = lonToIndex(location.longitude);
-
-  const store = await getAnalysisStore();
-  const { startIdx, numSteps } = await getAnalysisTimeRange(store, RECENT_DAYS);
-
-  const [tempData, precipData, windUData, windVData, cloudData] = await Promise.all([
-    fetchAnalysisVariable(store, "temperature_2m", latIdx, lonIdx, startIdx, numSteps),
-    fetchAnalysisVariable(store, "precipitation_surface", latIdx, lonIdx, startIdx, numSteps),
-    fetchAnalysisVariable(store, "wind_u_10m", latIdx, lonIdx, startIdx, numSteps),
-    fetchAnalysisVariable(store, "wind_v_10m", latIdx, lonIdx, startIdx, numSteps),
-    fetchAnalysisVariable(
-      store,
-      "total_cloud_cover_atmosphere",
-      latIdx,
-      lonIdx,
-      startIdx,
-      numSteps,
-    ),
-  ]);
-
-  const windSpeeds = windUData.map((u, i) => windSpeed(u, windVData[i]!));
-
-  return {
-    avgTemperature: avg(tempData),
-    avgPrecipitation: avg(precipData.map(precipToMmHr)),
-    avgWindSpeed: avg(windSpeeds),
-    avgCloudCover: avg(cloudData.map(cloudCoverToFraction)),
   };
 }

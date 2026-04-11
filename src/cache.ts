@@ -1,4 +1,4 @@
-import type { ForecastData, ForecastVariable, RecentWeather } from "./types.js";
+import type { ForecastData, ForecastVariable } from "./types.js";
 import type { ModelVariableInput } from "./blend.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -10,7 +10,6 @@ type SerializedModelInputs = Record<string, ModelVariableInput[]>;
 interface CacheEntry {
   timestamp: number;
   forecast: ForecastData;
-  recentWeather: RecentWeather;
   /** Per-model inputs for each variable, enabling immediate reblending */
   modelInputs?: SerializedModelInputs;
   hrrrAvailable?: boolean;
@@ -44,7 +43,6 @@ function writeStore(store: CacheStore): void {
 
 export interface CachedData {
   forecast: ForecastData;
-  recentWeather: RecentWeather;
   modelInputs: Map<ForecastVariable, ModelVariableInput[]> | null;
   hrrrAvailable: boolean;
 }
@@ -68,7 +66,6 @@ export function getCached(lat: number, lon: number): CachedData | null {
   }
   return {
     forecast: entry.forecast,
-    recentWeather: entry.recentWeather,
     modelInputs,
     hrrrAvailable: entry.hrrrAvailable ?? true,
   };
@@ -78,7 +75,6 @@ export function setCache(
   lat: number,
   lon: number,
   forecast: ForecastData,
-  recentWeather: RecentWeather,
   modelInputs?: Map<ForecastVariable, ModelVariableInput[]>,
   hrrrAvailable?: boolean,
 ): void {
@@ -100,7 +96,6 @@ export function setCache(
   store[locationKey(lat, lon)] = {
     timestamp: now,
     forecast,
-    recentWeather,
     modelInputs: serializedInputs,
     hrrrAvailable,
   };

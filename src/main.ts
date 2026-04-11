@@ -4,7 +4,6 @@ import {
   fetchGefsForecast,
   fetchGefsMetadata,
   fetchGefsVariable,
-  fetchRecentWeather,
   fetchLatestInitTime,
 } from "./weather.js";
 import {
@@ -131,7 +130,6 @@ try {
 
 /** Store last data for re-rendering on resize and unit toggle */
 let lastForecast: ForecastData | null = null;
-let lastRecentWeather: import("./types.js").RecentWeather | null = null;
 
 /** Cached per-model inputs for reblending without refetch */
 let cachedModelInputs: Map<ForecastVariable, ModelVariableInput[]> | null = null;
@@ -384,10 +382,7 @@ function reblendAndRender(): void {
       cloudCover: results.cloudCover ?? [],
     };
     lastForecast = forecast;
-    if (lastRecentWeather) {
-      const aberrations = detectAberrations(forecast, lastRecentWeather, getUnitSystem());
-      renderAberrations(aberrations);
-    }
+    renderAberrations(detectAberrations(forecast, getUnitSystem()));
     return;
   }
 
@@ -414,10 +409,7 @@ function reblendAndRender(): void {
   };
 
   lastForecast = forecast;
-  if (lastRecentWeather) {
-    const aberrations = detectAberrations(forecast, lastRecentWeather, getUnitSystem());
-    renderAberrations(aberrations);
-  }
+  renderAberrations(detectAberrations(forecast, getUnitSystem()));
   // Only re-render charts that have data
   for (const v of variables) {
     if (forecast[v].length > 0) {
@@ -513,14 +505,12 @@ async function checkForNewerForecast(
       updatingIndicator.classList.remove("hidden");
     }
 
-    const [gefsForecast, hrrrForecast, ecmwfForecast, aifsForecast, recentWeather] =
-      await Promise.all([
-        fetchGefsForecast(location),
-        fetchHrrrForecast(location),
-        fetchEcmwfForecast(location),
-        fetchAifsForecast(location),
-        fetchRecentWeather(location),
-      ]);
+    const [gefsForecast, hrrrForecast, ecmwfForecast, aifsForecast] = await Promise.all([
+      fetchGefsForecast(location),
+      fetchHrrrForecast(location),
+      fetchEcmwfForecast(location),
+      fetchAifsForecast(location),
+    ]);
 
     // Update cached per-model inputs
     hrrrAvailable = hrrrForecast !== null;
@@ -550,7 +540,6 @@ async function checkForNewerForecast(
     cachedModelInputs = newCache;
     cachedLocation = location;
     cachedInitTime = latestInit;
-    lastRecentWeather = recentWeather;
     updateCachedTimeRange(newCache);
 
     if (isNewer) {
@@ -568,7 +557,6 @@ async function checkForNewerForecast(
         location.latitude,
         location.longitude,
         lastForecast,
-        recentWeather,
         cachedModelInputs ?? undefined,
         hrrrAvailable,
       );
@@ -638,7 +626,6 @@ async function loadForecast(location: LatLon): Promise<void> {
 
   // Clear stale aberrations immediately on location switch
   aberrationsEl.innerHTML = "";
-  lastRecentWeather = null;
 
   try {
     // Check cache first — if valid, render immediately without skeletons
@@ -656,7 +643,6 @@ async function loadForecast(location: LatLon): Promise<void> {
 
     if (useCache && cached) {
       lastForecast = cached.forecast;
-      lastRecentWeather = cached.recentWeather;
       cachedLocation = location;
       cachedInitTime = cached.forecast.initTime;
 
@@ -668,8 +654,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       }
 
       initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
-      const aberrations = detectAberrations(cached.forecast, cached.recentWeather, getUnitSystem());
-      renderAberrations(aberrations);
+      renderAberrations(detectAberrations(cached.forecast, getUnitSystem()));
       showForecast();
       modelControlsEl.classList.remove("hidden");
       syncModelControls();
@@ -760,9 +745,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       renderVariableChart(variable, blended);
     });
 
-    const recentWeatherPromise = fetchRecentWeather(location);
-
-    const [recentWeather] = await Promise.all([recentWeatherPromise, ...variablePromises]);
+    await Promise.all(variablePromises);
 
     // Build complete ForecastData
     const forecast: ForecastData = {
@@ -775,19 +758,16 @@ async function loadForecast(location: LatLon): Promise<void> {
     };
 
     lastForecast = forecast;
-    lastRecentWeather = recentWeather;
     setCache(
       location.latitude,
       location.longitude,
       forecast,
-      recentWeather,
       cachedModelInputs ?? undefined,
       hrrrAvailable,
     );
 
     // Aberrations render after all data is available
-    const aberrations = detectAberrations(forecast, recentWeather, getUnitSystem());
-    renderAberrations(aberrations);
+    renderAberrations(detectAberrations(forecast, getUnitSystem()));
     setButtonsDisabled(false);
     updateBlendWeightsDisplay();
 
@@ -895,8 +875,8 @@ function syncUnitToggle(): void {
 function switchUnits(system: UnitSystem): void {
   setUnitSystem(system);
   syncUnitToggle();
-  if (lastForecast && lastRecentWeather && !forecastEl.classList.contains("hidden")) {
-    renderAberrations(detectAberrations(lastForecast, lastRecentWeather, system));
+  if (lastForecast && !forecastEl.classList.contains("hidden")) {
+    renderAberrations(detectAberrations(lastForecast, system));
     renderCharts(lastForecast);
   }
 }
