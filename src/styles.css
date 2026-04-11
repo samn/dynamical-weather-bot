@@ -26,6 +26,8 @@ html {
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {

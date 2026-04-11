@@ -551,20 +551,38 @@ export function renderChart(opts: ChartOptions): void {
   const displayHeight = rect.height;
   const compact = displayWidth < 400;
   const hasBands = intensityBands && intensityBands.length > 0;
+  const fontSize = compact ? 9 : 11;
+  const smallFontSize = compact ? 8 : 10;
+
+  // Compute y-range before padding so we can measure only visible band labels
+  const allRangePoints =
+    convertedOverlays.length > 0 ? [...data, ...convertedOverlays.flatMap((s) => s.data)] : data;
+  const { yMin, yMax } = computeYRange(allRangePoints, intensityBands, yClampMin, yClampMax);
+
+  // Dynamically compute left padding from visible band labels
+  const basePad = compact ? 40 : 50;
+  let leftPad = basePad;
+  if (hasBands) {
+    const visibleBands = intensityBands.filter((b) => {
+      const visTop = Math.max(b.min, yMin);
+      const visBot = Math.min(b.max, yMax);
+      return visTop < yMax && visBot > yMin;
+    });
+    if (visibleBands.length > 0) {
+      ctx.font = `${fontSize}px system-ui, sans-serif`;
+      const maxLabelWidth = Math.max(...visibleBands.map((b) => ctx.measureText(b.label).width));
+      leftPad = Math.max(basePad, Math.ceil(maxLabelWidth) + 8);
+    }
+  }
+
   const padding = {
     top: 10,
     right: compact ? 8 : 16,
     bottom: compact ? 28 : 32,
-    left: hasBands ? (compact ? 56 : 72) : compact ? 40 : 50,
+    left: leftPad,
   };
-  const fontSize = compact ? 9 : 11;
-  const smallFontSize = compact ? 8 : 10;
   const chartWidth = displayWidth - padding.left - padding.right;
   const chartHeight = displayHeight - padding.top - padding.bottom;
-
-  const allRangePoints =
-    convertedOverlays.length > 0 ? [...data, ...convertedOverlays.flatMap((s) => s.data)] : data;
-  const { yMin, yMax } = computeYRange(allRangePoints, intensityBands, yClampMin, yClampMax);
 
   const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
   const xTimeSpan = xMaxMs - xMinMs || 1;
