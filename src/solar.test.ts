@@ -157,6 +157,22 @@ describe("computeTimeMarkers", () => {
     expect(computeTimeMarkers(t, t, 40, -74)).toEqual([]);
   });
 
+  it("handles polar regions where computeSunTimes returns undefined", () => {
+    // Tromso, Norway during polar night — no sunrise/sunset
+    const start = utcDate(2026, 12, 20, 0).getTime();
+    const end = utcDate(2026, 12, 23, 0).getTime();
+    const markers = computeTimeMarkers(start, end, 69.6496, 18.956);
+
+    // Should still have midnight and noon markers but no sunrise/sunset
+    const sunrises = markers.filter((m) => m.type === "sunrise");
+    const sunsets = markers.filter((m) => m.type === "sunset");
+    expect(sunrises.length).toBe(0);
+    expect(sunsets.length).toBe(0);
+
+    const midnights = markers.filter((m) => m.type === "midnight");
+    expect(midnights.length).toBeGreaterThan(0);
+  });
+
   it("handles multi-day ranges with all marker types", () => {
     const start = utcDate(2026, 4, 5, 0).getTime();
     const end = utcDate(2026, 4, 8, 0).getTime();

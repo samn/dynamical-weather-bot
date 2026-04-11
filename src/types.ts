@@ -37,18 +37,6 @@ export interface ForecastData {
   cloudCover: ForecastPoint[];
 }
 
-/** Recent weather statistics for aberration comparison */
-export interface RecentWeather {
-  /** Average temperature over recent days */
-  avgTemperature: number;
-  /** Average precipitation rate */
-  avgPrecipitation: number;
-  /** Average wind speed */
-  avgWindSpeed: number;
-  /** Average cloud cover */
-  avgCloudCover: number;
-}
-
 /** Supported forecast model identifiers */
 export type ModelId = "NOAA GEFS" | "NOAA HRRR" | "ECMWF IFS ENS" | "ECMWF AIFS";
 

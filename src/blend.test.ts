@@ -768,6 +768,28 @@ describe("blendSingleVariable", () => {
     expect(result[0]!.median).toBeCloseTo(15, 1);
   });
 
+  it("blends two deterministic-only models with equal ensemble fallback", () => {
+    // When no ensemble models are present, bands should use equal weights
+    const gefsPoints = [
+      makeForecastPoint({ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 0 }),
+    ];
+    const hrrrPoints = [
+      makeForecastPoint({ median: 20, p10: 18, p90: 22, min: 16, max: 24, hoursFromNow: 0 }),
+    ];
+    const inputs = [
+      { model: "NOAA GEFS" as const, points: gefsPoints, isEnsemble: false },
+      { model: "NOAA HRRR" as const, points: hrrrPoints, isEnsemble: false },
+    ];
+    // useAccuracy=false so biases is undefined, testing biases ? ... : 0 branch
+    const result = blendSingleVariable("temperature", inputs, TEST_LOC, EMPTY_GRID, false);
+    // Equal weights → median = 15
+    expect(result[0]!.median).toBeCloseTo(15, 1);
+    // No ensemble models, so ensembleWeightSum=0, equal fallback for bands
+    // Bands are average of the two models, shifted by offset
+    expect(result[0]!.p10).toBeDefined();
+    expect(result[0]!.p90).toBeDefined();
+  });
+
   it("interpolates weights at lead time 36h", () => {
     const grid: AccuracyGrid = {
       gridResolution: 0.5,
