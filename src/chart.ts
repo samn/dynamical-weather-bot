@@ -551,13 +551,24 @@ export function renderChart(opts: ChartOptions): void {
   const displayHeight = rect.height;
   const compact = displayWidth < 400;
   const hasBands = intensityBands && intensityBands.length > 0;
+  const fontSize = compact ? 9 : 11;
+
+  // Measure actual band label widths for dynamic left padding
+  ctx.font = `${fontSize}px system-ui, sans-serif`;
+  let leftPad: number;
+  if (hasBands) {
+    const maxLabelWidth = Math.max(...intensityBands.map((b) => ctx.measureText(b.label).width));
+    leftPad = Math.ceil(maxLabelWidth) + 8;
+  } else {
+    leftPad = compact ? 40 : 50;
+  }
+
   const padding = {
     top: 10,
     right: compact ? 8 : 16,
     bottom: compact ? 28 : 32,
-    left: hasBands ? (compact ? 56 : 72) : compact ? 40 : 50,
+    left: leftPad,
   };
-  const fontSize = compact ? 9 : 11;
   const smallFontSize = compact ? 8 : 10;
   const chartWidth = displayWidth - padding.left - padding.right;
   const chartHeight = displayHeight - padding.top - padding.bottom;
