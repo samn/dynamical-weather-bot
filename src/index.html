@@ -61,6 +61,14 @@
       <div id="forecast" class="hidden">
         <div id="model-controls" class="hidden">
           <div id="model-checkboxes">
+            <span
+              id="select-all-models"
+              class="select-all-glyph"
+              role="button"
+              tabindex="0"
+              aria-label="Select all models"
+              >&#9745;</span
+            >
             <label class="model-checkbox">
               <input type="checkbox" id="model-gefs" checked />
               <span>GEFS</span>
@@ -78,9 +86,17 @@
               <span>AIFS</span>
             </label>
           </div>
-          <div id="blend-toggle">
-            <button id="magic-blend-btn" type="button" class="blend-btn active">Magic Blend</button>
-            <button id="equal-blend-btn" type="button" class="blend-btn">Equal Blend</button>
+          <div id="toggle-group">
+            <div id="view-toggle">
+              <button id="blended-view-btn" type="button" class="view-btn active">Blended</button>
+              <button id="per-model-view-btn" type="button" class="view-btn">Per Model</button>
+            </div>
+            <div id="blend-toggle">
+              <button id="magic-blend-btn" type="button" class="blend-btn active">
+                Magic Blend
+              </button>
+              <button id="equal-blend-btn" type="button" class="blend-btn">Equal Blend</button>
+            </div>
           </div>
         </div>
         <section id="aberrations"></section>

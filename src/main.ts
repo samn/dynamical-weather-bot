@@ -38,6 +38,8 @@ import {
   setEnabledModels,
   getMagicBlend,
   setMagicBlend,
+  getViewMode,
+  setViewMode,
 } from "./model-selection.js";
 import { detectAberrations } from "./aberrations.js";
 import {
@@ -45,6 +47,7 @@ import {
   renderChartSkeleton,
   stopChartSkeleton,
   type IntensityBand,
+  type ChartOverlaySeries,
 } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
 import { formatInitTime } from "./format.js";
@@ -77,12 +80,16 @@ const updatingIndicator = document.getElementById("updating-indicator") as HTMLS
 const metricBtn = document.getElementById("metric-btn") as HTMLSpanElement;
 const imperialBtn = document.getElementById("imperial-btn") as HTMLSpanElement;
 const modelControlsEl = document.getElementById("model-controls") as HTMLDivElement;
+const selectAllModels = document.getElementById("select-all-models") as HTMLSpanElement;
 const modelGefsCheckbox = document.getElementById("model-gefs") as HTMLInputElement;
 const modelHrrrCheckbox = document.getElementById("model-hrrr") as HTMLInputElement;
 const modelEcmwfCheckbox = document.getElementById("model-ecmwf") as HTMLInputElement;
 const modelAifsCheckbox = document.getElementById("model-aifs") as HTMLInputElement;
+const blendToggle = document.getElementById("blend-toggle") as HTMLDivElement;
 const magicBlendBtn = document.getElementById("magic-blend-btn") as HTMLButtonElement;
 const equalBlendBtn = document.getElementById("equal-blend-btn") as HTMLButtonElement;
+const blendedViewBtn = document.getElementById("blended-view-btn") as HTMLButtonElement;
+const perModelViewBtn = document.getElementById("per-model-view-btn") as HTMLButtonElement;
 const infoToggle = document.getElementById("info-toggle") as HTMLAnchorElement;
 const infoPanel = document.getElementById("info-panel") as HTMLDivElement;
 const blendWeightsInfo = document.getElementById("blend-weights-info") as HTMLParagraphElement;
@@ -230,6 +237,21 @@ const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
   },
 ];
 
+/** Per-model colors — Wong colorblind-safe palette (Nature Methods, 2011) */
+const MODEL_COLORS: Record<ModelId, string> = {
+  "NOAA GEFS": "#E69F00",
+  "NOAA HRRR": "#56B4E9",
+  "ECMWF IFS ENS": "#009E73",
+  "ECMWF AIFS": "#CC79A7",
+};
+
+const MODEL_SHORT_NAMES: Record<ModelId, string> = {
+  "NOAA GEFS": "GEFS",
+  "NOAA HRRR": "HRRR",
+  "ECMWF IFS ENS": "ECMWF",
+  "ECMWF AIFS": "AIFS",
+};
+
 /** Canvas ID for each forecast variable */
 const VARIABLE_CANVAS: Record<ForecastVariable, string> = {
   temperature: "temp-chart",
@@ -293,6 +315,7 @@ function chartOptsForVariable(variable: ForecastVariable): {
 function renderVariableChart(
   variable: ForecastVariable,
   data: import("./types.js").ForecastPoint[],
+  overlaySeries?: ChartOverlaySeries[],
 ): void {
   const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
   renderChart({
@@ -301,6 +324,7 @@ function renderVariableChart(
     timeRange: cachedTimeRange,
     latitude: cachedLocation?.latitude,
     longitude: cachedLocation?.longitude,
+    overlaySeries,
     ...chartOptsForVariable(variable),
   });
 }
@@ -319,9 +343,57 @@ function reblendAndRender(): void {
   if (!cachedModelInputs || !cachedLocation || !cachedInitTime) return;
 
   const enabledModels = getEnabledModels();
+  const viewMode = getViewMode();
+  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+
+  if (viewMode === "per-model") {
+    // Per-model (unaggregated) view: show each model's quantiles overlaid
+    for (const varKey of variables) {
+      const allInputs = cachedModelInputs.get(varKey);
+      if (!allInputs) continue;
+      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
+      if (filtered.length === 0) continue;
+
+      const overlays: ChartOverlaySeries[] = filtered.map((input) => ({
+        data: input.points,
+        color: MODEL_COLORS[input.model],
+        label: MODEL_SHORT_NAMES[input.model],
+      }));
+
+      // Use the first model's data as the primary (for axes/crosshair)
+      renderVariableChart(varKey, filtered[0]!.points, overlays);
+    }
+
+    // Still compute blended forecast for aberrations
+    const useMagic = getMagicBlend();
+    const grid = loadAccuracyGrid();
+    const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
+    for (const varKey of variables) {
+      const allInputs = cachedModelInputs.get(varKey);
+      if (!allInputs) continue;
+      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
+      if (filtered.length === 0) continue;
+      results[varKey] = blendSingleVariable(varKey, filtered, cachedLocation, grid, useMagic);
+    }
+    const forecast: ForecastData = {
+      location: cachedLocation,
+      initTime: cachedInitTime,
+      temperature: results.temperature ?? [],
+      precipitation: results.precipitation ?? [],
+      windSpeed: results.windSpeed ?? [],
+      cloudCover: results.cloudCover ?? [],
+    };
+    lastForecast = forecast;
+    if (lastRecentWeather) {
+      const aberrations = detectAberrations(forecast, lastRecentWeather, getUnitSystem());
+      renderAberrations(aberrations);
+    }
+    return;
+  }
+
+  // Blended (aggregated) view: existing behavior
   const useMagic = getMagicBlend();
   const grid = loadAccuracyGrid();
-  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
   const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
 
   for (const varKey of variables) {
@@ -371,16 +443,45 @@ function syncModelControls(): void {
     modelHrrrCheckbox.checked = false;
   }
 
+  // Select-all glyph state
+  const allAvailable: ModelId[] = hrrrAvailable
+    ? ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]
+    : ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
+  const allSelected = allAvailable.every((m) => enabled.has(m));
+  selectAllModels.textContent = allSelected ? "\u2611" : "\u2610";
+
+  // View toggle state
+  const viewMode = getViewMode();
+  blendedViewBtn.classList.toggle("active", viewMode === "blended");
+  perModelViewBtn.classList.toggle("active", viewMode === "per-model");
+
+  // Hide blend toggle in per-model mode (blending doesn't apply)
+  blendToggle.classList.toggle("hidden", viewMode === "per-model");
+
+  // Color model labels in per-model mode so they serve as a legend
+  const checkboxMap: Array<[HTMLInputElement, ModelId]> = [
+    [modelGefsCheckbox, "NOAA GEFS"],
+    [modelHrrrCheckbox, "NOAA HRRR"],
+    [modelEcmwfCheckbox, "ECMWF IFS ENS"],
+    [modelAifsCheckbox, "ECMWF AIFS"],
+  ];
+  for (const [checkbox, model] of checkboxMap) {
+    const labelSpan = checkbox.parentElement?.querySelector("span");
+    if (labelSpan) {
+      labelSpan.style.color = viewMode === "per-model" ? MODEL_COLORS[model] : "";
+    }
+  }
+
   // Blend toggle state
   const magic = getMagicBlend();
   magicBlendBtn.classList.toggle("active", magic);
   equalBlendBtn.classList.toggle("active", !magic);
 
-  // Disable blend toggle when only one model is selected
+  // Dim blend toggle when only one model is selected (still clickable)
   const enabledCount = [...enabled].filter((m) => m !== "NOAA HRRR" || hrrrAvailable).length;
-  const disableBlend = enabledCount <= 1;
-  magicBlendBtn.disabled = disableBlend;
-  equalBlendBtn.disabled = disableBlend;
+  const blendInactive = enabledCount <= 1;
+  magicBlendBtn.classList.toggle("inactive", blendInactive);
+  equalBlendBtn.classList.toggle("inactive", blendInactive);
 }
 
 /**
@@ -821,8 +922,8 @@ let resizeTimer: ReturnType<typeof setTimeout>;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (lastForecast && !forecastEl.classList.contains("hidden")) {
-      renderCharts(lastForecast);
+    if (!forecastEl.classList.contains("hidden")) {
+      reblendAndRender();
     }
   }, 250);
 });
@@ -858,17 +959,103 @@ modelAifsCheckbox.addEventListener("change", () =>
   handleModelCheckboxChange("ECMWF AIFS", modelAifsCheckbox),
 );
 
-magicBlendBtn.addEventListener("click", () => {
-  setMagicBlend(true);
+// Select-all glyph: re-enable all available models
+selectAllModels.addEventListener("click", () => {
+  const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
+  const enabled = new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable));
+  setEnabledModels(enabled);
   syncModelControls();
   reblendAndRender();
+});
+selectAllModels.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    selectAllModels.click();
+  }
 });
 
-equalBlendBtn.addEventListener("click", () => {
-  setMagicBlend(false);
+// Long-press (hold) on a model label to isolate that single source
+function setupLongPress(label: HTMLElement, model: ModelId): void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let longPressTriggered = false;
+
+  label.addEventListener("pointerdown", () => {
+    longPressTriggered = false;
+    timer = setTimeout(() => {
+      longPressTriggered = true;
+      // Clear any text selection that started during the hold
+      window.getSelection()?.removeAllRanges();
+      const current = getEnabledModels();
+      if (current.size === 1 && current.has(model)) {
+        // Already isolated on this model — restore all sources
+        const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
+        setEnabledModels(new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable)));
+      } else {
+        setEnabledModels(new Set<ModelId>([model]));
+      }
+      syncModelControls();
+      reblendAndRender();
+    }, 400);
+  });
+
+  const cancelTimer = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  label.addEventListener("pointerup", cancelTimer);
+  label.addEventListener("pointercancel", cancelTimer);
+
+  // Prevent the normal checkbox toggle when long press was triggered
+  label.addEventListener(
+    "click",
+    (e) => {
+      if (longPressTriggered) {
+        e.preventDefault();
+        e.stopPropagation();
+        longPressTriggered = false;
+      }
+    },
+    true,
+  );
+}
+
+const gefsLabel = modelGefsCheckbox.closest(".model-checkbox") as HTMLElement;
+const hrrrLabel = modelHrrrCheckbox.closest(".model-checkbox") as HTMLElement;
+const ecmwfLabel = modelEcmwfCheckbox.closest(".model-checkbox") as HTMLElement;
+const aifsLabel = modelAifsCheckbox.closest(".model-checkbox") as HTMLElement;
+setupLongPress(gefsLabel, "NOAA GEFS");
+setupLongPress(hrrrLabel, "NOAA HRRR");
+setupLongPress(ecmwfLabel, "ECMWF IFS ENS");
+setupLongPress(aifsLabel, "ECMWF AIFS");
+
+// View toggle — either button flips between blended / per-model
+function toggleViewMode(): void {
+  setViewMode(getViewMode() === "blended" ? "per-model" : "blended");
   syncModelControls();
   reblendAndRender();
-});
+}
+blendedViewBtn.addEventListener("click", toggleViewMode);
+perModelViewBtn.addEventListener("click", toggleViewMode);
+
+// Blend toggle — either button flips between magic / equal.
+// When only one model is selected, first click enables all sources.
+function toggleBlendMode(): void {
+  const enabledCount = [...getEnabledModels()].filter(
+    (m) => m !== "NOAA HRRR" || hrrrAvailable,
+  ).length;
+  if (enabledCount <= 1) {
+    const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
+    setEnabledModels(new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable)));
+  } else {
+    setMagicBlend(!getMagicBlend());
+  }
+  syncModelControls();
+  reblendAndRender();
+}
+magicBlendBtn.addEventListener("click", toggleBlendMode);
+equalBlendBtn.addEventListener("click", toggleBlendMode);
 
 // On load: if a zip code is in the URL, use it automatically
 const initialZip = getZipFromUrl();
