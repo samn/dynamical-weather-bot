@@ -1,6 +1,11 @@
 import type { ForecastData, Aberration } from "./types.js";
 import { type UnitSystem, formatTemp, msToMph } from "./units.js";
 
+/** Clamp a value to [0, 1] */
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
 /** Threshold for high precipitation (mm/hr) */
 const PRECIP_HIGH_THRESHOLD = 2;
 
@@ -21,16 +26,18 @@ export function detectAberrations(
 ): Aberration[] {
   const aberrations: Aberration[] = [];
 
-  // Check for extreme temperature swings within the forecast
+  // Check for extreme temperature swings within the forecast (using median,
+  // which is the most visible line on the chart)
   if (forecast.temperature.length > 0) {
-    const maxForecastTemp = Math.max(...forecast.temperature.map((p) => p.p90));
-    const minForecastTemp = Math.min(...forecast.temperature.map((p) => p.p10));
-    const tempRange = maxForecastTemp - minForecastTemp;
+    const medians = forecast.temperature.map((p) => p.median);
+    const maxMedianTemp = Math.max(...medians);
+    const minMedianTemp = Math.min(...medians);
+    const tempRange = maxMedianTemp - minMedianTemp;
     if (tempRange > 15) {
-      const minIndex = forecast.temperature.findIndex((p) => p.p10 === minForecastTemp);
-      const maxIndex = forecast.temperature.findIndex((p) => p.p90 === maxForecastTemp);
-      const firstTemp = minIndex <= maxIndex ? minForecastTemp : maxForecastTemp;
-      const secondTemp = minIndex <= maxIndex ? maxForecastTemp : minForecastTemp;
+      const minIndex = forecast.temperature.findIndex((p) => p.median === minMedianTemp);
+      const maxIndex = forecast.temperature.findIndex((p) => p.median === maxMedianTemp);
+      const firstTemp = minIndex <= maxIndex ? minMedianTemp : maxMedianTemp;
+      const secondTemp = minIndex <= maxIndex ? maxMedianTemp : minMedianTemp;
       aberrations.push({
         type: "danger",
         icon: "\u{1F321}\u{FE0F}",
@@ -82,8 +89,8 @@ export function detectAberrations(
   // Analyze cloud cover trends within the forecast window
   if (forecast.cloudCover.length >= 4) {
     const half = Math.floor(forecast.cloudCover.length / 2);
-    const earlyCloud = average(forecast.cloudCover.slice(0, half).map((p) => p.median));
-    const lateCloud = average(forecast.cloudCover.slice(half).map((p) => p.median));
+    const earlyCloud = clamp01(average(forecast.cloudCover.slice(0, half).map((p) => p.median)));
+    const lateCloud = clamp01(average(forecast.cloudCover.slice(half).map((p) => p.median)));
     const cloudDiff = lateCloud - earlyCloud;
 
     if (cloudDiff < -CLOUD_CHANGE_THRESHOLD) {

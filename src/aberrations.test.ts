@@ -55,11 +55,11 @@ describe("detectAberrations", () => {
     const forecast = makeForecast({
       temperature: Array.from({ length: 24 }, (_, i) =>
         makePoint({
-          median: 20,
-          p10: i < 12 ? 5 : 25,
-          p90: i < 12 ? 10 : 30,
-          min: 5,
-          max: 30,
+          median: i < 12 ? 5 : 30,
+          p10: i < 12 ? 3 : 28,
+          p90: i < 12 ? 7 : 32,
+          min: 3,
+          max: 32,
           hoursFromNow: i * 3,
         }),
       ),
@@ -67,7 +67,7 @@ describe("detectAberrations", () => {
     const result = detectAberrations(forecast);
     const swing = result.find((a) => a.message.includes("swing"));
     expect(swing).toBeDefined();
-    // Min (5°C) occurs first chronologically, so message should show cold→warm
+    // Median 5°C occurs first chronologically, so message should show cold→warm
     expect(swing!.message).toMatch(/5\.0°C to 30\.0°C/);
   });
 
@@ -75,11 +75,11 @@ describe("detectAberrations", () => {
     const forecast = makeForecast({
       temperature: Array.from({ length: 24 }, (_, i) =>
         makePoint({
-          median: 20,
-          p10: i < 12 ? 25 : 5,
-          p90: i < 12 ? 30 : 10,
-          min: 5,
-          max: 30,
+          median: i < 12 ? 30 : 5,
+          p10: i < 12 ? 28 : 3,
+          p90: i < 12 ? 32 : 7,
+          min: 3,
+          max: 32,
           hoursFromNow: i * 3,
         }),
       ),
@@ -87,7 +87,7 @@ describe("detectAberrations", () => {
     const result = detectAberrations(forecast);
     const swing = result.find((a) => a.message.includes("swing"));
     expect(swing).toBeDefined();
-    // Max (30°C) occurs first chronologically, so message should show warm→cold
+    // Median 30°C occurs first chronologically, so message should show warm→cold
     expect(swing!.message).toMatch(/30\.0°C to 5\.0°C/);
   });
 
@@ -164,11 +164,11 @@ describe("detectAberrations", () => {
     const forecast = makeForecast({
       temperature: Array.from({ length: 24 }, (_, i) =>
         makePoint({
-          median: 20,
-          p10: i < 12 ? 5 : 25,
-          p90: i < 12 ? 10 : 30,
-          min: 5,
-          max: 30,
+          median: i < 12 ? 5 : 30,
+          p10: i < 12 ? 3 : 28,
+          p90: i < 12 ? 7 : 32,
+          min: 3,
+          max: 32,
           hoursFromNow: i * 3,
         }),
       ),
