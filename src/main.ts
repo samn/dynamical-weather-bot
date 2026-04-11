@@ -77,6 +77,7 @@ const updatingIndicator = document.getElementById("updating-indicator") as HTMLS
 const metricBtn = document.getElementById("metric-btn") as HTMLSpanElement;
 const imperialBtn = document.getElementById("imperial-btn") as HTMLSpanElement;
 const modelControlsEl = document.getElementById("model-controls") as HTMLDivElement;
+const selectAllModels = document.getElementById("select-all-models") as HTMLSpanElement;
 const modelGefsCheckbox = document.getElementById("model-gefs") as HTMLInputElement;
 const modelHrrrCheckbox = document.getElementById("model-hrrr") as HTMLInputElement;
 const modelEcmwfCheckbox = document.getElementById("model-ecmwf") as HTMLInputElement;
@@ -370,6 +371,13 @@ function syncModelControls(): void {
   if (!hrrrAvailable) {
     modelHrrrCheckbox.checked = false;
   }
+
+  // Select-all glyph state
+  const allAvailable: ModelId[] = hrrrAvailable
+    ? ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]
+    : ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
+  const allSelected = allAvailable.every((m) => enabled.has(m));
+  selectAllModels.textContent = allSelected ? "\u2611" : "\u2610";
 
   // Blend toggle state
   const magic = getMagicBlend();
@@ -857,6 +865,69 @@ modelEcmwfCheckbox.addEventListener("change", () =>
 modelAifsCheckbox.addEventListener("change", () =>
   handleModelCheckboxChange("ECMWF AIFS", modelAifsCheckbox),
 );
+
+// Select-all glyph: re-enable all available models
+selectAllModels.addEventListener("click", () => {
+  const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
+  const enabled = new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable));
+  setEnabledModels(enabled);
+  syncModelControls();
+  reblendAndRender();
+});
+selectAllModels.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    selectAllModels.click();
+  }
+});
+
+// Long-press (hold) on a model label to isolate that single source
+function setupLongPress(label: HTMLElement, model: ModelId): void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let longPressTriggered = false;
+
+  label.addEventListener("pointerdown", () => {
+    longPressTriggered = false;
+    timer = setTimeout(() => {
+      longPressTriggered = true;
+      const enabled = new Set<ModelId>([model]);
+      setEnabledModels(enabled);
+      syncModelControls();
+      reblendAndRender();
+    }, 400);
+  });
+
+  const cancelTimer = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  label.addEventListener("pointerup", cancelTimer);
+  label.addEventListener("pointercancel", cancelTimer);
+
+  // Prevent the normal checkbox toggle when long press was triggered
+  label.addEventListener(
+    "click",
+    (e) => {
+      if (longPressTriggered) {
+        e.preventDefault();
+        e.stopPropagation();
+        longPressTriggered = false;
+      }
+    },
+    true,
+  );
+}
+
+const gefsLabel = modelGefsCheckbox.closest(".model-checkbox") as HTMLElement;
+const hrrrLabel = modelHrrrCheckbox.closest(".model-checkbox") as HTMLElement;
+const ecmwfLabel = modelEcmwfCheckbox.closest(".model-checkbox") as HTMLElement;
+const aifsLabel = modelAifsCheckbox.closest(".model-checkbox") as HTMLElement;
+setupLongPress(gefsLabel, "NOAA GEFS");
+setupLongPress(hrrrLabel, "NOAA HRRR");
+setupLongPress(ecmwfLabel, "ECMWF IFS ENS");
+setupLongPress(aifsLabel, "ECMWF AIFS");
 
 magicBlendBtn.addEventListener("click", () => {
   setMagicBlend(true);
