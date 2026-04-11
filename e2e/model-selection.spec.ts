@@ -224,7 +224,7 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#equal-blend-btn")).not.toHaveClass(/active/);
   });
 
-  test("blend toggle is disabled when only one model is selected", async ({
+  test("blend toggle is dimmed when only one model is selected", async ({
     page,
   }) => {
     await showModelControls(page);
@@ -233,12 +233,12 @@ test.describe("model selection controls", () => {
     await page.locator("#model-hrrr").uncheck();
     await page.locator("#model-aifs").uncheck();
 
-    // Only ECMWF remains — blend toggle should be disabled
-    await expect(page.locator("#magic-blend-btn")).toBeDisabled();
-    await expect(page.locator("#equal-blend-btn")).toBeDisabled();
+    // Only ECMWF remains — blend toggle should have .inactive class
+    await expect(page.locator("#magic-blend-btn")).toHaveClass(/inactive/);
+    await expect(page.locator("#equal-blend-btn")).toHaveClass(/inactive/);
   });
 
-  test("blend toggle re-enables when second model is checked", async ({
+  test("blend toggle un-dims when second model is checked", async ({
     page,
   }) => {
     await showModelControls(page);
@@ -247,12 +247,12 @@ test.describe("model selection controls", () => {
     await page.locator("#model-gefs").uncheck();
     await page.locator("#model-hrrr").uncheck();
     await page.locator("#model-aifs").uncheck();
-    await expect(page.locator("#magic-blend-btn")).toBeDisabled();
+    await expect(page.locator("#magic-blend-btn")).toHaveClass(/inactive/);
 
     // Re-enable a second model
     await page.locator("#model-gefs").check();
-    await expect(page.locator("#magic-blend-btn")).toBeEnabled();
-    await expect(page.locator("#equal-blend-btn")).toBeEnabled();
+    await expect(page.locator("#magic-blend-btn")).not.toHaveClass(/inactive/);
+    await expect(page.locator("#equal-blend-btn")).not.toHaveClass(/inactive/);
   });
 
   test("model selection persists across page reloads", async ({ page }) => {
