@@ -14,6 +14,12 @@ export interface IntensityBand {
   color: string;
 }
 
+export interface ChartOverlaySeries {
+  data: ForecastPoint[];
+  color: string;
+  label: string;
+}
+
 interface ChartOptions {
   canvas: HTMLCanvasElement;
   data: ForecastPoint[];
@@ -37,6 +43,8 @@ interface ChartOptions {
   yClampMin?: number;
   /** Clamp computed y-axis maximum (after padding) to this ceiling */
   yClampMax?: number;
+  /** Additional data series to overlay (per-model mode) */
+  overlaySeries?: ChartOverlaySeries[];
 }
 
 interface ChartState {
@@ -60,6 +68,7 @@ interface ChartState {
   xMaxMs: number;
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
+  overlaySeries?: Array<{ data: ConvertedPoint[]; color: string; label: string }>;
 }
 
 interface ConvertedPoint extends ForecastPoint {
@@ -494,6 +503,7 @@ export function renderChart(opts: ChartOptions): void {
     longitude,
     yClampMin,
     yClampMax,
+    overlaySeries: rawOverlaySeries,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -506,6 +516,25 @@ export function renderChart(opts: ChartOptions): void {
     min: conv(p.min),
     max: conv(p.max),
   }));
+
+  const convertedOverlays: Array<{ data: ConvertedPoint[]; color: string; label: string }> = [];
+  if (rawOverlaySeries) {
+    for (const s of rawOverlaySeries) {
+      convertedOverlays.push({
+        data: s.data.map((p) => ({
+          ...p,
+          timeMs: new Date(p.time).getTime(),
+          median: conv(p.median),
+          p10: conv(p.p10),
+          p90: conv(p.p90),
+          min: conv(p.min),
+          max: conv(p.max),
+        })),
+        color: s.color,
+        label: s.label,
+      });
+    }
+  }
 
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -533,12 +562,13 @@ export function renderChart(opts: ChartOptions): void {
   const chartWidth = displayWidth - padding.left - padding.right;
   const chartHeight = displayHeight - padding.top - padding.bottom;
 
-  const { yMin, yMax } = computeYRange(data, intensityBands, yClampMin, yClampMax);
+  const allRangePoints =
+    convertedOverlays.length > 0 ? [...data, ...convertedOverlays.flatMap((s) => s.data)] : data;
+  const { yMin, yMax } = computeYRange(allRangePoints, intensityBands, yClampMin, yClampMax);
 
   const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
   const xTimeSpan = xMaxMs - xMinMs || 1;
   const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
-  const xScale = (i: number): number => timeToX(data[i]!.timeMs);
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
@@ -565,47 +595,57 @@ export function renderChart(opts: ChartOptions): void {
   ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
   ctx.clip();
 
-  // Draw min-max band
-  ctx.fillStyle = hexToRgba(color, 0.08);
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = xScale(i);
-    const y = yScale(data[i]!.max);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  for (let i = data.length - 1; i >= 0; i--) {
-    ctx.lineTo(xScale(i), yScale(data[i]!.min));
-  }
-  ctx.closePath();
-  ctx.fill();
+  // Build list of series to draw
+  const hasOverlays = convertedOverlays.length > 0;
+  const seriesToDraw = hasOverlays
+    ? convertedOverlays.map((s) => ({ data: s.data, color: s.color }))
+    : [{ data, color }];
+  const minMaxAlpha = hasOverlays ? 0.06 : 0.08;
+  const p10p90Alpha = hasOverlays ? 0.12 : 0.2;
 
-  // Draw P10-P90 band
-  ctx.fillStyle = hexToRgba(color, 0.2);
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = xScale(i);
-    const y = yScale(data[i]!.p90);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  for (let i = data.length - 1; i >= 0; i--) {
-    ctx.lineTo(xScale(i), yScale(data[i]!.p10));
-  }
-  ctx.closePath();
-  ctx.fill();
+  for (const series of seriesToDraw) {
+    // Draw min-max band
+    ctx.fillStyle = hexToRgba(series.color, minMaxAlpha);
+    ctx.beginPath();
+    for (let i = 0; i < series.data.length; i++) {
+      const x = timeToX(series.data[i]!.timeMs);
+      const y = yScale(series.data[i]!.max);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    for (let i = series.data.length - 1; i >= 0; i--) {
+      ctx.lineTo(timeToX(series.data[i]!.timeMs), yScale(series.data[i]!.min));
+    }
+    ctx.closePath();
+    ctx.fill();
 
-  // Draw median line
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = xScale(i);
-    const y = yScale(data[i]!.median);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    // Draw P10-P90 band
+    ctx.fillStyle = hexToRgba(series.color, p10p90Alpha);
+    ctx.beginPath();
+    for (let i = 0; i < series.data.length; i++) {
+      const x = timeToX(series.data[i]!.timeMs);
+      const y = yScale(series.data[i]!.p90);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    for (let i = series.data.length - 1; i >= 0; i--) {
+      ctx.lineTo(timeToX(series.data[i]!.timeMs), yScale(series.data[i]!.p10));
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw median line
+    ctx.strokeStyle = series.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < series.data.length; i++) {
+      const x = timeToX(series.data[i]!.timeMs);
+      const y = yScale(series.data[i]!.median);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
 
   ctx.restore(); // remove data clip
 
@@ -762,6 +802,7 @@ export function renderChart(opts: ChartOptions): void {
     xMinMs,
     xMaxMs,
     baseImage,
+    overlaySeries: convertedOverlays.length > 0 ? convertedOverlays : undefined,
   });
 
   if (!listenersAttached.has(canvas)) {
@@ -882,17 +923,7 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
   ctx.lineTo(x, padding.top + chartHeight);
   ctx.stroke();
 
-  // Draw dot on median
   const medianY = yScale(point.median);
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, medianY, 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Build tooltip text
   const date = new Date(point.time);
   const timeStr = date.toLocaleTimeString(undefined, {
     hour: "numeric",
@@ -901,17 +932,52 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
   });
   const dayStr = date.toLocaleDateString(undefined, { weekday: "short" });
   const unitSuffix = unit ? ` ${unit}` : "";
-  const lines = [
-    `${dayStr} ${timeStr}`,
-    `Median: ${formatValue(point.median)}${unitSuffix}`,
-    `Range: ${formatValue(point.p10)} – ${formatValue(point.p90)}${unitSuffix}`,
-  ];
 
-  // Add intensity label when bands are configured
-  if (state.intensityBands) {
-    const band = state.intensityBands.find((b) => point.median >= b.min && point.median < b.max);
-    if (band) {
-      lines.push(band.label);
+  let lines: string[];
+
+  if (state.overlaySeries && state.overlaySeries.length > 0) {
+    lines = [`${dayStr} ${timeStr}`];
+    for (const series of state.overlaySeries) {
+      let sIdx = 0;
+      let sBestDist = Infinity;
+      for (let i = 0; i < series.data.length; i++) {
+        const dist = Math.abs(series.data[i]!.timeMs - pointerMs);
+        if (dist < sBestDist) {
+          sBestDist = dist;
+          sIdx = i;
+        }
+      }
+      const sp = series.data[sIdx]!;
+      const sy = yScale(sp.median);
+      ctx.fillStyle = series.color;
+      ctx.beginPath();
+      ctx.arc(timeToX(sp.timeMs), sy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      lines.push(`${series.label}: ${formatValue(sp.median)}${unitSuffix}`);
+    }
+  } else {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, medianY, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    lines = [
+      `${dayStr} ${timeStr}`,
+      `Median: ${formatValue(point.median)}${unitSuffix}`,
+      `Range: ${formatValue(point.p10)} – ${formatValue(point.p90)}${unitSuffix}`,
+    ];
+
+    if (state.intensityBands) {
+      const band = state.intensityBands.find((b) => point.median >= b.min && point.median < b.max);
+      if (band) {
+        lines.push(band.label);
+      }
     }
   }
 

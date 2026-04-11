@@ -2,6 +2,7 @@ import type { ModelId } from "./types.js";
 
 const MODELS_KEY = "enabled-models";
 const BLEND_KEY = "magic-blend";
+const VIEW_KEY = "view-mode";
 
 const ALL_MODELS: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
 
@@ -27,4 +28,14 @@ export function getMagicBlend(): boolean {
 
 export function setMagicBlend(enabled: boolean): void {
   localStorage.setItem(BLEND_KEY, String(enabled));
+}
+
+export type ViewMode = "blended" | "per-model";
+
+export function getViewMode(): ViewMode {
+  return localStorage.getItem(VIEW_KEY) === "per-model" ? "per-model" : "blended";
+}
+
+export function setViewMode(mode: ViewMode): void {
+  localStorage.setItem(VIEW_KEY, mode);
 }

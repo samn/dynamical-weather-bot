@@ -38,6 +38,8 @@ import {
   setEnabledModels,
   getMagicBlend,
   setMagicBlend,
+  getViewMode,
+  setViewMode,
 } from "./model-selection.js";
 import { detectAberrations } from "./aberrations.js";
 import {
@@ -45,6 +47,7 @@ import {
   renderChartSkeleton,
   stopChartSkeleton,
   type IntensityBand,
+  type ChartOverlaySeries,
 } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
 import { formatInitTime } from "./format.js";
@@ -82,8 +85,11 @@ const modelGefsCheckbox = document.getElementById("model-gefs") as HTMLInputElem
 const modelHrrrCheckbox = document.getElementById("model-hrrr") as HTMLInputElement;
 const modelEcmwfCheckbox = document.getElementById("model-ecmwf") as HTMLInputElement;
 const modelAifsCheckbox = document.getElementById("model-aifs") as HTMLInputElement;
+const blendToggle = document.getElementById("blend-toggle") as HTMLDivElement;
 const magicBlendBtn = document.getElementById("magic-blend-btn") as HTMLButtonElement;
 const equalBlendBtn = document.getElementById("equal-blend-btn") as HTMLButtonElement;
+const blendedViewBtn = document.getElementById("blended-view-btn") as HTMLButtonElement;
+const perModelViewBtn = document.getElementById("per-model-view-btn") as HTMLButtonElement;
 const infoToggle = document.getElementById("info-toggle") as HTMLAnchorElement;
 const infoPanel = document.getElementById("info-panel") as HTMLDivElement;
 const blendWeightsInfo = document.getElementById("blend-weights-info") as HTMLParagraphElement;
@@ -231,6 +237,21 @@ const PRECIP_BANDS_IMPERIAL: IntensityBand[] = [
   },
 ];
 
+/** Per-model colors for the per-model (unaggregated) view */
+const MODEL_COLORS: Record<ModelId, string> = {
+  "NOAA GEFS": "#f5a623",
+  "NOAA HRRR": "#66b3ff",
+  "ECMWF IFS ENS": "#81c784",
+  "ECMWF AIFS": "#ce93d8",
+};
+
+const MODEL_SHORT_NAMES: Record<ModelId, string> = {
+  "NOAA GEFS": "GEFS",
+  "NOAA HRRR": "HRRR",
+  "ECMWF IFS ENS": "ECMWF",
+  "ECMWF AIFS": "AIFS",
+};
+
 /** Canvas ID for each forecast variable */
 const VARIABLE_CANVAS: Record<ForecastVariable, string> = {
   temperature: "temp-chart",
@@ -294,6 +315,7 @@ function chartOptsForVariable(variable: ForecastVariable): {
 function renderVariableChart(
   variable: ForecastVariable,
   data: import("./types.js").ForecastPoint[],
+  overlaySeries?: ChartOverlaySeries[],
 ): void {
   const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
   renderChart({
@@ -302,6 +324,7 @@ function renderVariableChart(
     timeRange: cachedTimeRange,
     latitude: cachedLocation?.latitude,
     longitude: cachedLocation?.longitude,
+    overlaySeries,
     ...chartOptsForVariable(variable),
   });
 }
@@ -320,9 +343,57 @@ function reblendAndRender(): void {
   if (!cachedModelInputs || !cachedLocation || !cachedInitTime) return;
 
   const enabledModels = getEnabledModels();
+  const viewMode = getViewMode();
+  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+
+  if (viewMode === "per-model") {
+    // Per-model (unaggregated) view: show each model's quantiles overlaid
+    for (const varKey of variables) {
+      const allInputs = cachedModelInputs.get(varKey);
+      if (!allInputs) continue;
+      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
+      if (filtered.length === 0) continue;
+
+      const overlays: ChartOverlaySeries[] = filtered.map((input) => ({
+        data: input.points,
+        color: MODEL_COLORS[input.model],
+        label: MODEL_SHORT_NAMES[input.model],
+      }));
+
+      // Use the first model's data as the primary (for axes/crosshair)
+      renderVariableChart(varKey, filtered[0]!.points, overlays);
+    }
+
+    // Still compute blended forecast for aberrations
+    const useMagic = getMagicBlend();
+    const grid = loadAccuracyGrid();
+    const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
+    for (const varKey of variables) {
+      const allInputs = cachedModelInputs.get(varKey);
+      if (!allInputs) continue;
+      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
+      if (filtered.length === 0) continue;
+      results[varKey] = blendSingleVariable(varKey, filtered, cachedLocation, grid, useMagic);
+    }
+    const forecast: ForecastData = {
+      location: cachedLocation,
+      initTime: cachedInitTime,
+      temperature: results.temperature ?? [],
+      precipitation: results.precipitation ?? [],
+      windSpeed: results.windSpeed ?? [],
+      cloudCover: results.cloudCover ?? [],
+    };
+    lastForecast = forecast;
+    if (lastRecentWeather) {
+      const aberrations = detectAberrations(forecast, lastRecentWeather, getUnitSystem());
+      renderAberrations(aberrations);
+    }
+    return;
+  }
+
+  // Blended (aggregated) view: existing behavior
   const useMagic = getMagicBlend();
   const grid = loadAccuracyGrid();
-  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
   const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
 
   for (const varKey of variables) {
@@ -378,6 +449,28 @@ function syncModelControls(): void {
     : ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
   const allSelected = allAvailable.every((m) => enabled.has(m));
   selectAllModels.textContent = allSelected ? "\u2611" : "\u2610";
+
+  // View toggle state
+  const viewMode = getViewMode();
+  blendedViewBtn.classList.toggle("active", viewMode === "blended");
+  perModelViewBtn.classList.toggle("active", viewMode === "per-model");
+
+  // Hide blend toggle in per-model mode (blending doesn't apply)
+  blendToggle.classList.toggle("hidden", viewMode === "per-model");
+
+  // Color model labels in per-model mode so they serve as a legend
+  const checkboxMap: Array<[HTMLInputElement, ModelId]> = [
+    [modelGefsCheckbox, "NOAA GEFS"],
+    [modelHrrrCheckbox, "NOAA HRRR"],
+    [modelEcmwfCheckbox, "ECMWF IFS ENS"],
+    [modelAifsCheckbox, "ECMWF AIFS"],
+  ];
+  for (const [checkbox, model] of checkboxMap) {
+    const labelSpan = checkbox.parentElement?.querySelector("span");
+    if (labelSpan) {
+      labelSpan.style.color = viewMode === "per-model" ? MODEL_COLORS[model] : "";
+    }
+  }
 
   // Blend toggle state
   const magic = getMagicBlend();
@@ -829,8 +922,8 @@ let resizeTimer: ReturnType<typeof setTimeout>;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (lastForecast && !forecastEl.classList.contains("hidden")) {
-      renderCharts(lastForecast);
+    if (!forecastEl.classList.contains("hidden")) {
+      reblendAndRender();
     }
   }, 250);
 });
@@ -928,6 +1021,18 @@ setupLongPress(gefsLabel, "NOAA GEFS");
 setupLongPress(hrrrLabel, "NOAA HRRR");
 setupLongPress(ecmwfLabel, "ECMWF IFS ENS");
 setupLongPress(aifsLabel, "ECMWF AIFS");
+
+blendedViewBtn.addEventListener("click", () => {
+  setViewMode("blended");
+  syncModelControls();
+  reblendAndRender();
+});
+
+perModelViewBtn.addEventListener("click", () => {
+  setViewMode("per-model");
+  syncModelControls();
+  reblendAndRender();
+});
 
 magicBlendBtn.addEventListener("click", () => {
   setMagicBlend(true);
