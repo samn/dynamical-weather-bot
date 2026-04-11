@@ -16,7 +16,7 @@ A single-page web app that displays 72-hour probabilistic weather forecasts by b
 
 ### ZIP Code Entry
 - A text input accepts exactly 5 numeric digits (`pattern="[0-9]{5}"`, `inputmode="numeric"`, `maxlength="5"`).
-- Submitted via a "Go" button or Enter key.
+- Auto-submits when 5 digits are entered, or submitted via Enter key.
 - Validated against regex `^\d{5}$` before any network request. Invalid input shows: "Please enter a valid 5-digit US ZIP code."
 - Coordinates fetched from `https://api.zippopotam.us/us/{zip}`. Uses the first result's latitude/longitude.
 - On success, the URL is updated to `?zip={zip}` via `replaceState` (no page reload).
