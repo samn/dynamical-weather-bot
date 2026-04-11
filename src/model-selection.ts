@@ -28,3 +28,13 @@ export function getMagicBlend(): boolean {
 export function setMagicBlend(enabled: boolean): void {
   localStorage.setItem(BLEND_KEY, String(enabled));
 }
+
+const PER_MODEL_KEY = "show-per-model";
+
+export function getShowPerModel(): boolean {
+  return localStorage.getItem(PER_MODEL_KEY) === "true";
+}
+
+export function setShowPerModel(enabled: boolean): void {
+  localStorage.setItem(PER_MODEL_KEY, String(enabled));
+}

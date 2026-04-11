@@ -292,7 +292,8 @@ button:hover {
   pointer-events: none;
 }
 
-#blend-toggle {
+#blend-toggle,
+#view-toggle {
   display: flex;
   gap: 0;
 }
@@ -473,7 +474,8 @@ footer a {
     justify-content: center;
   }
 
-  #blend-toggle {
+  #blend-toggle,
+  #view-toggle {
     justify-content: center;
   }
 

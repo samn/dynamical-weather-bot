@@ -38,6 +38,8 @@ import {
   setEnabledModels,
   getMagicBlend,
   setMagicBlend,
+  getShowPerModel,
+  setShowPerModel,
 } from "./model-selection.js";
 import { detectAberrations } from "./aberrations.js";
 import {
@@ -45,6 +47,7 @@ import {
   renderChartSkeleton,
   stopChartSkeleton,
   type IntensityBand,
+  type ChartSeries,
 } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
 import { formatInitTime } from "./format.js";
@@ -83,9 +86,27 @@ const modelEcmwfCheckbox = document.getElementById("model-ecmwf") as HTMLInputEl
 const modelAifsCheckbox = document.getElementById("model-aifs") as HTMLInputElement;
 const magicBlendBtn = document.getElementById("magic-blend-btn") as HTMLButtonElement;
 const equalBlendBtn = document.getElementById("equal-blend-btn") as HTMLButtonElement;
+const blendedViewBtn = document.getElementById("blended-view-btn") as HTMLButtonElement;
+const perModelViewBtn = document.getElementById("per-model-view-btn") as HTMLButtonElement;
 const infoToggle = document.getElementById("info-toggle") as HTMLAnchorElement;
 const infoPanel = document.getElementById("info-panel") as HTMLDivElement;
 const blendWeightsInfo = document.getElementById("blend-weights-info") as HTMLParagraphElement;
+
+/** Per-model display colors */
+const MODEL_COLORS: Record<ModelId, string> = {
+  "NOAA GEFS": "#f5a623",
+  "NOAA HRRR": "#66bb6a",
+  "ECMWF IFS ENS": "#5b9cf6",
+  "ECMWF AIFS": "#ce93d8",
+};
+
+/** Short display names for models */
+const MODEL_SHORT_NAMES: Record<ModelId, string> = {
+  "NOAA GEFS": "GEFS",
+  "NOAA HRRR": "HRRR",
+  "ECMWF IFS ENS": "ECMWF",
+  "ECMWF AIFS": "AIFS",
+};
 
 /** Load bundled accuracy grid data, or return empty grid if not available */
 function loadAccuracyGrid(): AccuracyGrid {
@@ -305,10 +326,43 @@ function renderVariableChart(
   });
 }
 
+/** Render a single variable's chart with per-model series overlay */
+function renderVariableChartPerModel(
+  variable: ForecastVariable,
+  inputs: ModelVariableInput[],
+): void {
+  const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
+  const enabledModels = getEnabledModels();
+  const filtered = inputs.filter((i) => enabledModels.has(i.model));
+  if (filtered.length === 0) return;
+
+  const series: ChartSeries[] = filtered.map((input) => ({
+    data: input.points,
+    color: MODEL_COLORS[input.model],
+    label: MODEL_SHORT_NAMES[input.model],
+  }));
+
+  renderChart({
+    canvas,
+    data: series[0]!.data,
+    timeRange: cachedTimeRange,
+    latitude: cachedLocation?.latitude,
+    longitude: cachedLocation?.longitude,
+    ...chartOptsForVariable(variable),
+    series,
+  });
+}
+
 function renderCharts(forecast: ForecastData): void {
   const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+  const perModel = getShowPerModel();
   for (const v of variables) {
-    renderVariableChart(v, forecast[v]);
+    if (perModel && cachedModelInputs) {
+      const allInputs = cachedModelInputs.get(v);
+      if (allInputs) renderVariableChartPerModel(v, allInputs);
+    } else {
+      renderVariableChart(v, forecast[v]);
+    }
   }
 }
 
@@ -347,9 +401,37 @@ function reblendAndRender(): void {
     renderAberrations(aberrations);
   }
   // Only re-render charts that have data
+  const perModel = getShowPerModel();
   for (const v of variables) {
-    if (forecast[v].length > 0) {
+    if (perModel) {
+      const allInputs = cachedModelInputs.get(v);
+      if (allInputs) renderVariableChartPerModel(v, allInputs);
+    } else if (forecast[v].length > 0) {
       renderVariableChart(v, forecast[v]);
+    }
+  }
+}
+
+/** Update chart legend text for blended vs per-model mode */
+function updateChartLegends(): void {
+  const perModel = getShowPerModel();
+  const legends = document.querySelectorAll(".chart-legend");
+  for (const el of legends) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+    if (perModel) {
+      const enabledModels = [...getEnabledModels()].filter(
+        (m) => m !== "NOAA HRRR" || hrrrAvailable,
+      );
+      enabledModels.forEach((model, i) => {
+        if (i > 0) el.appendChild(document.createTextNode("  "));
+        const dash = document.createElement("span");
+        dash.style.color = MODEL_COLORS[model];
+        dash.textContent = "\u2501";
+        el.appendChild(dash);
+        el.appendChild(document.createTextNode(` ${MODEL_SHORT_NAMES[model]}`));
+      });
+    } else {
+      el.textContent = "\u2501 median \u2593 p10-p90 \u2591 min-max";
     }
   }
 }
@@ -371,16 +453,23 @@ function syncModelControls(): void {
     modelHrrrCheckbox.checked = false;
   }
 
+  // View toggle state
+  const perModel = getShowPerModel();
+  blendedViewBtn.classList.toggle("active", !perModel);
+  perModelViewBtn.classList.toggle("active", perModel);
+
   // Blend toggle state
   const magic = getMagicBlend();
   magicBlendBtn.classList.toggle("active", magic);
   equalBlendBtn.classList.toggle("active", !magic);
 
-  // Disable blend toggle when only one model is selected
+  // Disable blend toggle when only one model selected or in per-model mode
   const enabledCount = [...enabled].filter((m) => m !== "NOAA HRRR" || hrrrAvailable).length;
-  const disableBlend = enabledCount <= 1;
+  const disableBlend = enabledCount <= 1 || perModel;
   magicBlendBtn.disabled = disableBlend;
   equalBlendBtn.disabled = disableBlend;
+
+  updateChartLegends();
 }
 
 /**
@@ -656,7 +745,11 @@ async function loadForecast(location: LatLon): Promise<void> {
       // Animate skeleton out, then render real chart
       const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
       await stopChartSkeleton(canvas);
-      renderVariableChart(variable, blended);
+      if (getShowPerModel()) {
+        renderVariableChartPerModel(variable, allInputs);
+      } else {
+        renderVariableChart(variable, blended);
+      }
     });
 
     const recentWeatherPromise = fetchRecentWeather(location);
@@ -869,6 +962,80 @@ equalBlendBtn.addEventListener("click", () => {
   syncModelControls();
   reblendAndRender();
 });
+
+// View toggle handlers
+blendedViewBtn.addEventListener("click", () => {
+  setShowPerModel(false);
+  syncModelControls();
+  reblendAndRender();
+});
+
+perModelViewBtn.addEventListener("click", () => {
+  setShowPerModel(true);
+  syncModelControls();
+  reblendAndRender();
+});
+
+// Long-press on model checkboxes: solo-select or re-select all
+const LONG_PRESS_DURATION = 500;
+
+function getAllAvailableModels(): Set<ModelId> {
+  const models: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
+  if (hrrrAvailable) models.push("NOAA HRRR");
+  return new Set(models);
+}
+
+function setupLongPress(label: HTMLElement, model: ModelId): void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let triggered = false;
+
+  label.addEventListener("pointerdown", () => {
+    triggered = false;
+    timer = setTimeout(() => {
+      triggered = true;
+      const enabled = getEnabledModels();
+      if (enabled.size === 1 && enabled.has(model)) {
+        setEnabledModels(getAllAvailableModels());
+      } else {
+        setEnabledModels(new Set([model]));
+      }
+      syncModelControls();
+      reblendAndRender();
+    }, LONG_PRESS_DURATION);
+  });
+
+  label.addEventListener("pointerup", () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  });
+
+  label.addEventListener("pointerleave", () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  });
+
+  label.addEventListener("click", (e) => {
+    if (triggered) {
+      e.preventDefault();
+      triggered = false;
+    }
+  });
+
+  label.addEventListener("contextmenu", (e) => {
+    if (timer || triggered) {
+      e.preventDefault();
+    }
+  });
+}
+
+setupLongPress(modelGefsCheckbox.closest(".model-checkbox") as HTMLElement, "NOAA GEFS");
+setupLongPress(modelHrrrCheckbox.closest(".model-checkbox") as HTMLElement, "NOAA HRRR");
+setupLongPress(modelEcmwfCheckbox.closest(".model-checkbox") as HTMLElement, "ECMWF IFS ENS");
+setupLongPress(modelAifsCheckbox.closest(".model-checkbox") as HTMLElement, "ECMWF AIFS");
 
 // On load: if a zip code is in the URL, use it automatically
 const initialZip = getZipFromUrl();

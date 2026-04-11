@@ -14,6 +14,13 @@ export interface IntensityBand {
   color: string;
 }
 
+/** A data series for multi-source overlay rendering */
+export interface ChartSeries {
+  data: ForecastPoint[];
+  color: string;
+  label: string;
+}
+
 interface ChartOptions {
   canvas: HTMLCanvasElement;
   data: ForecastPoint[];
@@ -37,6 +44,8 @@ interface ChartOptions {
   yClampMin?: number;
   /** Clamp computed y-axis maximum (after padding) to this ceiling */
   yClampMax?: number;
+  /** Multiple data series for per-model overlay rendering */
+  series?: ChartSeries[];
 }
 
 interface ChartState {
@@ -60,6 +69,8 @@ interface ChartState {
   xMaxMs: number;
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
+  /** Multiple converted series for multi-source tooltip rendering */
+  series?: Array<{ data: ConvertedPoint[]; color: string; label: string }>;
 }
 
 interface ConvertedPoint extends ForecastPoint {
@@ -470,6 +481,54 @@ export function computeYRange(
   return { yMin, yMax };
 }
 
+/** Draw min-max band, p10-p90 band, and median line for a single data series */
+function drawForecastBands(
+  ctx: CanvasRenderingContext2D,
+  data: ConvertedPoint[],
+  color: string,
+  timeToX: (ms: number) => number,
+  yScale: (v: number) => number,
+  alpha: { minMax: number; p10p90: number },
+): void {
+  if (data.length === 0) return;
+
+  // Min-max band
+  ctx.fillStyle = hexToRgba(color, alpha.minMax);
+  ctx.beginPath();
+  ctx.moveTo(timeToX(data[0]!.timeMs), yScale(data[0]!.max));
+  for (let i = 1; i < data.length; i++) {
+    ctx.lineTo(timeToX(data[i]!.timeMs), yScale(data[i]!.max));
+  }
+  for (let i = data.length - 1; i >= 0; i--) {
+    ctx.lineTo(timeToX(data[i]!.timeMs), yScale(data[i]!.min));
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // P10-P90 band
+  ctx.fillStyle = hexToRgba(color, alpha.p10p90);
+  ctx.beginPath();
+  ctx.moveTo(timeToX(data[0]!.timeMs), yScale(data[0]!.p90));
+  for (let i = 1; i < data.length; i++) {
+    ctx.lineTo(timeToX(data[i]!.timeMs), yScale(data[i]!.p90));
+  }
+  for (let i = data.length - 1; i >= 0; i--) {
+    ctx.lineTo(timeToX(data[i]!.timeMs), yScale(data[i]!.p10));
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Median line
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(timeToX(data[0]!.timeMs), yScale(data[0]!.median));
+  for (let i = 1; i < data.length; i++) {
+    ctx.lineTo(timeToX(data[i]!.timeMs), yScale(data[i]!.median));
+  }
+  ctx.stroke();
+}
+
 /**
  * Render a probabilistic forecast chart on a canvas element.
  * Shows:
@@ -494,18 +553,26 @@ export function renderChart(opts: ChartOptions): void {
     longitude,
     yClampMin,
     yClampMax,
+    series: rawSeries,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
-  const data: ConvertedPoint[] = rawData.map((p) => ({
-    ...p,
-    timeMs: new Date(p.time).getTime(),
-    median: conv(p.median),
-    p10: conv(p.p10),
-    p90: conv(p.p90),
-    min: conv(p.min),
-    max: conv(p.max),
-  }));
+  function convertPoints(points: ForecastPoint[]): ConvertedPoint[] {
+    return points.map((p) => ({
+      ...p,
+      timeMs: new Date(p.time).getTime(),
+      median: conv(p.median),
+      p10: conv(p.p10),
+      p90: conv(p.p90),
+      min: conv(p.min),
+      max: conv(p.max),
+    }));
+  }
+  const data: ConvertedPoint[] = convertPoints(rawData);
+  const convertedSeries =
+    rawSeries && rawSeries.length > 0
+      ? rawSeries.map((s) => ({ label: s.label, color: s.color, data: convertPoints(s.data) }))
+      : undefined;
 
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -533,12 +600,16 @@ export function renderChart(opts: ChartOptions): void {
   const chartWidth = displayWidth - padding.left - padding.right;
   const chartHeight = displayHeight - padding.top - padding.bottom;
 
-  const { yMin, yMax } = computeYRange(data, intensityBands, yClampMin, yClampMax);
+  const yRangeData = convertedSeries ? convertedSeries.flatMap((s) => s.data) : data;
+  const { yMin, yMax } = computeYRange(yRangeData, intensityBands, yClampMin, yClampMax);
 
-  const [xMinMs, xMaxMs] = timeRange ?? [data[0]!.timeMs, data[data.length - 1]!.timeMs];
+  const xFallback = convertedSeries ? convertedSeries[0]!.data : data;
+  const [xMinMs, xMaxMs] = timeRange ?? [
+    xFallback[0]!.timeMs,
+    xFallback[xFallback.length - 1]!.timeMs,
+  ];
   const xTimeSpan = xMaxMs - xMinMs || 1;
   const timeToX = (ms: number): number => padding.left + ((ms - xMinMs) / xTimeSpan) * chartWidth;
-  const xScale = (i: number): number => timeToX(data[i]!.timeMs);
   const yScale = (v: number): number =>
     padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
 
@@ -565,47 +636,13 @@ export function renderChart(opts: ChartOptions): void {
   ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
   ctx.clip();
 
-  // Draw min-max band
-  ctx.fillStyle = hexToRgba(color, 0.08);
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = xScale(i);
-    const y = yScale(data[i]!.max);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  if (convertedSeries) {
+    for (const s of convertedSeries) {
+      drawForecastBands(ctx, s.data, s.color, timeToX, yScale, { minMax: 0.06, p10p90: 0.15 });
+    }
+  } else {
+    drawForecastBands(ctx, data, color, timeToX, yScale, { minMax: 0.08, p10p90: 0.2 });
   }
-  for (let i = data.length - 1; i >= 0; i--) {
-    ctx.lineTo(xScale(i), yScale(data[i]!.min));
-  }
-  ctx.closePath();
-  ctx.fill();
-
-  // Draw P10-P90 band
-  ctx.fillStyle = hexToRgba(color, 0.2);
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = xScale(i);
-    const y = yScale(data[i]!.p90);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  for (let i = data.length - 1; i >= 0; i--) {
-    ctx.lineTo(xScale(i), yScale(data[i]!.p10));
-  }
-  ctx.closePath();
-  ctx.fill();
-
-  // Draw median line
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = xScale(i);
-    const y = yScale(data[i]!.median);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
 
   ctx.restore(); // remove data clip
 
@@ -762,6 +799,7 @@ export function renderChart(opts: ChartOptions): void {
     xMinMs,
     xMaxMs,
     baseImage,
+    series: convertedSeries,
   });
 
   if (!listenersAttached.has(canvas)) {
@@ -850,8 +888,115 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
 
   const { timeToX, xMinMs, xMaxMs } = state;
 
-  // Find nearest data point by pre-cached timestamp
   const pointerMs = xMinMs + ((pointerX - padding.left) / chartWidth) * (xMaxMs - xMinMs || 1);
+
+  // Multi-series tooltip
+  if (state.series && state.series.length > 0) {
+    const nearestPoints = state.series.map((s) => {
+      let sIdx = 0;
+      let sBest = Infinity;
+      for (let i = 0; i < s.data.length; i++) {
+        const dist = Math.abs(s.data[i]!.timeMs - pointerMs);
+        if (dist < sBest) {
+          sBest = dist;
+          sIdx = i;
+        }
+      }
+      return { label: s.label, color: s.color, point: s.data[sIdx]! };
+    });
+
+    const firstPt = nearestPoints[0]!.point;
+    const yScaleMs = (v: number): number =>
+      padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
+    const dprMs = window.devicePixelRatio || 1;
+    const xMs = timeToX(firstPt.timeMs);
+
+    ctx.putImageData(state.baseImage, 0, 0);
+    ctx.setTransform(dprMs, 0, 0, dprMs, 0, 0);
+
+    // Crosshair
+    ctx.strokeStyle = "#ffffff40";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(xMs, padding.top);
+    ctx.lineTo(xMs, padding.top + chartHeight);
+    ctx.stroke();
+
+    // Dots on each series median
+    for (const np of nearestPoints) {
+      const dotX = timeToX(np.point.timeMs);
+      const dotY = yScaleMs(np.point.median);
+      ctx.fillStyle = np.color;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // Build tooltip text
+    const dateMs = new Date(firstPt.time);
+    const timeStrMs = dateMs.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    const dayStrMs = dateMs.toLocaleDateString(undefined, { weekday: "short" });
+    const unitSuffix = unit ? ` ${unit}` : "";
+    const lines: string[] = [`${dayStrMs} ${timeStrMs}`];
+    const lineColors: string[] = ["#8b8fa3"];
+
+    for (const np of nearestPoints) {
+      const hasRange = Math.abs(np.point.p90 - np.point.p10) > 0.01;
+      if (hasRange) {
+        lines.push(
+          `${np.label}: ${formatValue(np.point.median)} (${formatValue(np.point.p10)}\u2013${formatValue(np.point.p90)})${unitSuffix}`,
+        );
+      } else {
+        lines.push(`${np.label}: ${formatValue(np.point.median)}${unitSuffix}`);
+      }
+      lineColors.push(np.color);
+    }
+
+    // Measure, position, and draw tooltip
+    const tooltipFontMs = compact ? 9 : 11;
+    ctx.font = `${tooltipFontMs}px system-ui, sans-serif`;
+    const lineHeightMs = tooltipFontMs + 4;
+    const padH = 8;
+    const padV = 6;
+    let maxW = 0;
+    for (const line of lines) {
+      const w = ctx.measureText(line).width;
+      if (w > maxW) maxW = w;
+    }
+    const tW = maxW + padH * 2;
+    const tH = lines.length * lineHeightMs + padV * 2;
+
+    let tX = xMs + 10;
+    if (tX + tW > displayWidth - 2) tX = xMs - tW - 10;
+    tX = Math.max(2, Math.min(displayWidth - tW - 2, tX));
+    const medianYMs = yScaleMs(firstPt.median);
+    let tY = medianYMs - tH / 2;
+    tY = Math.max(2, Math.min(displayHeight - tH - 2, tY));
+
+    ctx.fillStyle = "rgba(20, 22, 30, 0.92)";
+    ctx.strokeStyle = "#3a3d4a";
+    ctx.lineWidth = 1;
+    roundRect(ctx, tX, tY, tW, tH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillStyle = lineColors[i]!;
+      ctx.fillText(lines[i]!, tX + padH, tY + padV + i * lineHeightMs);
+    }
+    return;
+  }
+
+  // Find nearest data point by pre-cached timestamp
   let idx = 0;
   let bestDist = Infinity;
   for (let i = 0; i < data.length; i++) {
