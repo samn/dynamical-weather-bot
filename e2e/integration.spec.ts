@@ -307,17 +307,6 @@ test.describe("real forecast integration", () => {
       expect(pt.max, "cloud ≤ 1").toBeLessThanOrEqual(1.05);
     }
 
-    // ── Recent weather ──
-
-    const recent = cached!.recentWeather as Record<string, number>;
-    expect(recent).toBeDefined();
-    expect(recent.avgTemperature).toBeGreaterThan(-50);
-    expect(recent.avgTemperature).toBeLessThan(55);
-    expect(recent.avgPrecipitation).toBeGreaterThanOrEqual(0);
-    expect(recent.avgWindSpeed).toBeGreaterThanOrEqual(0);
-    expect(recent.avgCloudCover).toBeGreaterThanOrEqual(0);
-    expect(recent.avgCloudCover).toBeLessThanOrEqual(1);
-
     // ── Per-model inputs ──
 
     const modelInputs = cached!.modelInputs as Record<string, CachedModelInput[]>;

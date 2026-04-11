@@ -4,12 +4,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 /** Block all data store requests */
 async function blockZarrRequests(page: Page) {
-  await page.route("**/data.dynamical.org/**", (route) =>
-    route.abort("blockedbyclient"),
-  );
-  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
-    route.abort("blockedbyclient"),
-  );
+  await page.route("**/data.dynamical.org/**", (route) => route.abort("blockedbyclient"));
+  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) => route.abort("blockedbyclient"));
 }
 
 /** Mock the zippopotam.us API for ZIP code lookups */
@@ -39,13 +35,7 @@ async function mockZipApi(page: Page) {
 }
 
 /** Build forecast points with fixed values across all timesteps */
-function makePoints(opts: {
-  median: number;
-  p10: number;
-  p90: number;
-  min: number;
-  max: number;
-}) {
+function makePoints(opts: { median: number; p10: number; p90: number; min: number; max: number }) {
   const now = Date.now();
   return Array.from({ length: 24 }, (_, i) => ({
     time: new Date(now + i * 3 * 3600_000).toISOString(),
@@ -67,11 +57,12 @@ function buildEdgeCaseCache(overrides: {
   const tempPoints = makePoints({ median: 15, p10: 13, p90: 17, min: 11, max: 19 });
 
   const variables = ["temperature", "precipitation", "windSpeed", "cloudCover"] as const;
-  const modelInputs: Record<string, Array<{ model: string; points: typeof tempPoints; isEnsemble: boolean }>> = {};
+  const modelInputs: Record<
+    string,
+    Array<{ model: string; points: typeof tempPoints; isEnsemble: boolean }>
+  > = {};
   for (const v of variables) {
-    modelInputs[v] = [
-      { model: "NOAA GEFS", points: tempPoints, isEnsemble: true },
-    ];
+    modelInputs[v] = [{ model: "NOAA GEFS", points: tempPoints, isEnsemble: true }];
   }
 
   return {
@@ -83,12 +74,6 @@ function buildEdgeCaseCache(overrides: {
       precipitation: makePoints({ median: 0.5, p10: 0, p90: 1.5, min: 0, max: 3 }),
       windSpeed: makePoints(overrides.windSpeed),
       cloudCover: makePoints(overrides.cloudCover),
-    },
-    recentWeather: {
-      avgTemperature: 12,
-      avgPrecipitation: 0.1,
-      avgWindSpeed: 3,
-      avgCloudCover: 0.4,
     },
     modelInputs,
     hrrrAvailable: false,
@@ -236,9 +221,7 @@ test.describe("chart y-axis clamping", () => {
     expect(bounds.bottommost).toBeLessThanOrEqual(chart.chartBottom + 2);
   });
 
-  test("wind speed graph lines do not extend below chart area", async ({
-    page,
-  }) => {
+  test("wind speed graph lines do not extend below chart area", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
 
@@ -260,9 +243,7 @@ test.describe("chart y-axis clamping", () => {
     expect(bounds.bottommost).toBeLessThanOrEqual(chart.chartBottom + 2);
   });
 
-  test("wind speed graph lines stay in bounds when all values are zero", async ({
-    page,
-  }) => {
+  test("wind speed graph lines stay in bounds when all values are zero", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
 

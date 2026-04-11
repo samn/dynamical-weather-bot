@@ -1,9 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * Helper: build mock ForecastData and RecentWeather, then inject them into
- * the running app via the module's exported functions so we skip real Zarr
- * network calls entirely.
+ * Helper: build mock ForecastData, then inject it into the running app via
+ * the module's exported functions so we skip real Zarr network calls entirely.
  *
  * We achieve this by intercepting the dynamical.org and zippopotam.us
  * network requests and, for the ZIP flow, also injecting mock data into
@@ -59,46 +58,26 @@ function mockForecastData() {
   };
 }
 
-function mockRecentWeather() {
-  return {
-    avgTemperature: 12,
-    avgPrecipitation: 0.1,
-    avgWindSpeed: 3,
-    avgCloudCover: 0.4,
-  };
-}
-
 /**
- * Inject mock weather modules into the page so that fetchForecast /
- * fetchRecentWeather resolve with deterministic data instead of hitting
- * real Zarr stores.
+ * Inject mock weather modules into the page so that fetchForecast resolves
+ * with deterministic data instead of hitting real Zarr stores.
  */
 async function injectMockWeatherData(page: Page) {
   const forecast = mockForecastData();
-  const recent = mockRecentWeather();
 
-  await page.addInitScript(
-    ({ forecast, recent }) => {
-      // Patch the global fetch so that any call to dynamical.org returns
-      // something that won't crash zarrita, but more importantly we'll
-      // intercept at a higher level by patching the module exports on the
-      // window object so loadForecast picks up our mock data.
-      (window as unknown as Record<string, unknown>).__mockForecast =
-        forecast;
-      (window as unknown as Record<string, unknown>).__mockRecent = recent;
-    },
-    { forecast, recent },
-  );
+  await page.addInitScript((forecast) => {
+    // Patch the global fetch so that any call to dynamical.org returns
+    // something that won't crash zarrita, but more importantly we'll
+    // intercept at a higher level by patching the module exports on the
+    // window object so loadForecast picks up our mock data.
+    (window as unknown as Record<string, unknown>).__mockForecast = forecast;
+  }, forecast);
 }
 
 /** Block all requests to data stores (Icechunk S3 + legacy Zarr) to prevent real fetches */
 async function blockZarrRequests(page: Page) {
-  await page.route("**/data.dynamical.org/**", (route) =>
-    route.abort("blockedbyclient"),
-  );
-  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
-    route.abort("blockedbyclient"),
-  );
+  await page.route("**/data.dynamical.org/**", (route) => route.abort("blockedbyclient"));
+  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) => route.abort("blockedbyclient"));
 }
 
 /** Mock the zippopotam.us API for ZIP code lookups */
@@ -137,17 +116,13 @@ test.describe("page load and initial state", () => {
     await blockZarrRequests(page);
     await page.goto("/");
 
-    await expect(page.locator("h1")).toHaveText(
-      "72-Hour Probabilistic Forecast",
-    );
+    await expect(page.locator("h1")).toHaveText("72-Hour Probabilistic Forecast");
     await expect(page.locator("#geolocate-btn")).toBeVisible();
     await expect(page.locator("#zip-input")).toBeVisible();
     await expect(page.locator("#zip-form button[type=submit]")).toBeVisible();
   });
 
-  test("loading, error, and forecast sections are hidden initially", async ({
-    page,
-  }) => {
+  test("loading, error, and forecast sections are hidden initially", async ({ page }) => {
     await blockZarrRequests(page);
     await page.goto("/");
 
@@ -156,9 +131,7 @@ test.describe("page load and initial state", () => {
     await expect(page.locator("#forecast")).toHaveClass(/hidden/);
   });
 
-  test("forecast meta bar is hidden initially and shown after loading starts", async ({
-    page,
-  }) => {
+  test("forecast meta bar is hidden initially and shown after loading starts", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await page.goto("/");
@@ -207,9 +180,7 @@ test.describe("ZIP code input", () => {
     await expect(input).toHaveAttribute("aria-label", "ZIP code");
   });
 
-  test("submitting a valid ZIP code shows loading state", async ({
-    page,
-  }) => {
+  test("submitting a valid ZIP code shows loading state", async ({ page }) => {
     // Use a delayed Zarr abort so the loading/skeleton state persists
     // long enough for the assertion to observe it.
     await page.route("**/data.dynamical.org/**", async (route) => {
@@ -294,9 +265,7 @@ test.describe("unit toggle", () => {
     await expect(page.locator("#imperial-btn")).not.toHaveClass(/active/);
   });
 
-  test("clicking imperial button after metric restores imperial", async ({
-    page,
-  }) => {
+  test("clicking imperial button after metric restores imperial", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await page.goto("/");
@@ -346,18 +315,13 @@ test.describe("forecast display with mocked data", () => {
     await page.goto("/");
 
     // Inject mock data by replacing the fetch functions in the app
-    await page.evaluate(
-      ({ forecast, recent }) => {
-        // We need to override the global fetch to handle the Zarr requests,
-        // but since that's complex, instead we directly trigger the app's
-        // rendering by manipulating the DOM and dispatching events.
-        // Store the mock data in a place the test can access
-        (window as unknown as Record<string, unknown>).__testForecast =
-          forecast;
-        (window as unknown as Record<string, unknown>).__testRecent = recent;
-      },
-      { forecast: mockForecastData(), recent: mockRecentWeather() },
-    );
+    await page.evaluate((forecast) => {
+      // We need to override the global fetch to handle the Zarr requests,
+      // but since that's complex, instead we directly trigger the app's
+      // rendering by manipulating the DOM and dispatching events.
+      // Store the mock data in a place the test can access
+      (window as unknown as Record<string, unknown>).__testForecast = forecast;
+    }, mockForecastData());
   }
 
   test("location label updates when ZIP is submitted", async ({ page }) => {
@@ -386,9 +350,7 @@ test.describe("forecast display with mocked data", () => {
     }
   });
 
-  test("error state shows message and re-enables inputs", async ({
-    page,
-  }) => {
+  test("error state shows message and re-enables inputs", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await page.goto("/");
@@ -436,9 +398,7 @@ test.describe("chart section structure", () => {
     await expect(titles.nth(3)).toHaveText("Cloud Cover");
   });
 
-  test("chart legends contain median, p10-p90, and min-max text", async ({
-    page,
-  }) => {
+  test("chart legends contain median, p10-p90, and min-max text", async ({ page }) => {
     await blockZarrRequests(page);
     await page.goto("/");
 
@@ -455,9 +415,7 @@ test.describe("chart section structure", () => {
 });
 
 test.describe("geolocation button", () => {
-  test("clicking geolocate with permission denied shows error", async ({
-    page,
-  }) => {
+  test("clicking geolocate with permission denied shows error", async ({ page }) => {
     await blockZarrRequests(page);
 
     // Override geolocation to simulate denial
@@ -552,9 +510,7 @@ test.describe("accessibility", () => {
 });
 
 test.describe("location display and reset", () => {
-  test("location bar is visible and location display is hidden initially", async ({
-    page,
-  }) => {
+  test("location bar is visible and location display is hidden initially", async ({ page }) => {
     await blockZarrRequests(page);
     await page.goto("/");
 
@@ -562,9 +518,7 @@ test.describe("location display and reset", () => {
     await expect(page.locator("#location-display")).toHaveClass(/hidden/);
   });
 
-  test("location bar hides and location display shows after ZIP submit", async ({
-    page,
-  }) => {
+  test("location bar hides and location display shows after ZIP submit", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await page.goto("/");
@@ -576,9 +530,7 @@ test.describe("location display and reset", () => {
     await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
   });
 
-  test("location label shows ZIP code and coordinates after ZIP submit", async ({
-    page,
-  }) => {
+  test("location label shows ZIP code and coordinates after ZIP submit", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await page.goto("/");
@@ -591,9 +543,7 @@ test.describe("location display and reset", () => {
     expect(label).toMatch(/\d+\.\d+/);
   });
 
-  test("globe reset button shows location selection with back button", async ({
-    page,
-  }) => {
+  test("globe reset button shows location selection with back button", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await page.goto("/");

@@ -13,12 +13,8 @@ async function showModelControls(page: Page) {
 
 /** Block all data store requests (Icechunk S3 + legacy Zarr) */
 async function blockZarrRequests(page: Page) {
-  await page.route("**/data.dynamical.org/**", (route) =>
-    route.abort("blockedbyclient"),
-  );
-  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
-    route.abort("blockedbyclient"),
-  );
+  await page.route("**/data.dynamical.org/**", (route) => route.abort("blockedbyclient"));
+  await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) => route.abort("blockedbyclient"));
 }
 
 /** Mock the zippopotam.us API for ZIP code lookups */
@@ -71,11 +67,18 @@ function buildCacheEntry() {
   const gefsPoints = makeModelPoints(10); // cooler
   const ecmwfPoints = makeModelPoints(20); // warmer
   const variables = ["temperature", "precipitation", "windSpeed", "cloudCover"] as const;
-  const modelInputs: Record<string, Array<{ model: string; points: typeof points; isEnsemble: boolean }>> = {};
+  const modelInputs: Record<
+    string,
+    Array<{ model: string; points: typeof points; isEnsemble: boolean }>
+  > = {};
   for (const v of variables) {
     modelInputs[v] = [
       { model: "NOAA GEFS", points: v === "temperature" ? gefsPoints : points, isEnsemble: true },
-      { model: "ECMWF IFS ENS", points: v === "temperature" ? ecmwfPoints : points, isEnsemble: true },
+      {
+        model: "ECMWF IFS ENS",
+        points: v === "temperature" ? ecmwfPoints : points,
+        isEnsemble: true,
+      },
     ];
   }
   return {
@@ -86,13 +89,14 @@ function buildCacheEntry() {
       temperature: points,
       precipitation: points.map((p) => ({ ...p, median: 0.5, p10: 0, p90: 1.5, min: 0, max: 3 })),
       windSpeed: points.map((p) => ({ ...p, median: 4, p10: 2, p90: 7, min: 1, max: 12 })),
-      cloudCover: points.map((p) => ({ ...p, median: 0.5, p10: 0.2, p90: 0.8, min: 0.1, max: 0.95 })),
-    },
-    recentWeather: {
-      avgTemperature: 12,
-      avgPrecipitation: 0.1,
-      avgWindSpeed: 3,
-      avgCloudCover: 0.4,
+      cloudCover: points.map((p) => ({
+        ...p,
+        median: 0.5,
+        p10: 0.2,
+        p90: 0.8,
+        min: 0.1,
+        max: 0.95,
+      })),
     },
     modelInputs,
     hrrrAvailable: false,
@@ -122,9 +126,7 @@ test.describe("model selection controls", () => {
     });
   });
 
-  test("model controls are hidden initially before forecast loads", async ({
-    page,
-  }) => {
+  test("model controls are hidden initially before forecast loads", async ({ page }) => {
     await expect(page.locator("#model-controls")).toHaveClass(/hidden/);
   });
 
@@ -144,9 +146,7 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#model-ecmwf")).toBeChecked();
   });
 
-  test("blend toggle buttons exist with Magic Blend active by default", async ({
-    page,
-  }) => {
+  test("blend toggle buttons exist with Magic Blend active by default", async ({ page }) => {
     await showModelControls(page);
 
     await expect(page.locator("#magic-blend-btn")).toBeVisible();
@@ -201,9 +201,7 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#model-gefs")).toBeChecked();
   });
 
-  test("clicking Equal Blend activates it and deactivates Magic Blend", async ({
-    page,
-  }) => {
+  test("clicking Equal Blend activates it and deactivates Magic Blend", async ({ page }) => {
     await showModelControls(page);
 
     await page.locator("#equal-blend-btn").click();
@@ -212,9 +210,7 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#magic-blend-btn")).not.toHaveClass(/active/);
   });
 
-  test("clicking Magic Blend after Equal restores Magic Blend", async ({
-    page,
-  }) => {
+  test("clicking Magic Blend after Equal restores Magic Blend", async ({ page }) => {
     await showModelControls(page);
 
     await page.locator("#equal-blend-btn").click();
@@ -224,9 +220,7 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#equal-blend-btn")).not.toHaveClass(/active/);
   });
 
-  test("blend toggle is dimmed when only one model is selected", async ({
-    page,
-  }) => {
+  test("blend toggle is dimmed when only one model is selected", async ({ page }) => {
     await showModelControls(page);
 
     await page.locator("#model-gefs").uncheck();
@@ -238,9 +232,7 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#equal-blend-btn")).toHaveClass(/inactive/);
   });
 
-  test("blend toggle un-dims when second model is checked", async ({
-    page,
-  }) => {
+  test("blend toggle un-dims when second model is checked", async ({ page }) => {
     await showModelControls(page);
 
     // Get down to one model
@@ -288,9 +280,7 @@ test.describe("model selection controls", () => {
 });
 
 test.describe("model controls with cached forecast", () => {
-  test("model controls are visible when forecast loads from cache", async ({
-    page,
-  }) => {
+  test("model controls are visible when forecast loads from cache", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await seedCache(page);
@@ -308,9 +298,7 @@ test.describe("model controls with cached forecast", () => {
     await expect(page.locator("#blend-toggle")).toBeVisible();
   });
 
-  test("available model checkboxes are checked when loading from cache", async ({
-    page,
-  }) => {
+  test("available model checkboxes are checked when loading from cache", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await seedCache(page);
@@ -341,9 +329,7 @@ test.describe("model controls with cached forecast", () => {
     await expect(page.locator("#magic-blend-btn")).toHaveClass(/active/);
   });
 
-  test("model controls visible on auto-load from URL with cache", async ({
-    page,
-  }) => {
+  test("model controls visible on auto-load from URL with cache", async ({ page }) => {
     await blockZarrRequests(page);
     await mockZipApi(page);
     await seedCache(page);
@@ -437,11 +423,9 @@ test.describe("model controls mobile layout", () => {
         "Forecast initialized Mar 18, 2:00 AM EDT";
     });
 
-    const justifyContent = await page
-      .locator("#forecast-meta-bar")
-      .evaluate((el) => {
-        return getComputedStyle(el).justifyContent;
-      });
+    const justifyContent = await page.locator("#forecast-meta-bar").evaluate((el) => {
+      return getComputedStyle(el).justifyContent;
+    });
     expect(justifyContent).toBe("center");
   });
 
@@ -451,11 +435,9 @@ test.describe("model controls mobile layout", () => {
     await page.goto("/");
     await showModelControls(page);
 
-    const flexDirection = await page
-      .locator("#model-controls")
-      .evaluate((el) => {
-        return getComputedStyle(el).flexDirection;
-      });
+    const flexDirection = await page.locator("#model-controls").evaluate((el) => {
+      return getComputedStyle(el).flexDirection;
+    });
     expect(flexDirection).toBe("column");
   });
 
@@ -465,11 +447,9 @@ test.describe("model controls mobile layout", () => {
     await page.goto("/");
     await showModelControls(page);
 
-    const justifyContent = await page
-      .locator("#model-checkboxes")
-      .evaluate((el) => {
-        return getComputedStyle(el).justifyContent;
-      });
+    const justifyContent = await page.locator("#model-checkboxes").evaluate((el) => {
+      return getComputedStyle(el).justifyContent;
+    });
     expect(justifyContent).toBe("center");
   });
 
@@ -479,11 +459,9 @@ test.describe("model controls mobile layout", () => {
     await page.goto("/");
     await showModelControls(page);
 
-    const justifyContent = await page
-      .locator("#blend-toggle")
-      .evaluate((el) => {
-        return getComputedStyle(el).justifyContent;
-      });
+    const justifyContent = await page.locator("#blend-toggle").evaluate((el) => {
+      return getComputedStyle(el).justifyContent;
+    });
     expect(justifyContent).toBe("center");
   });
 });
