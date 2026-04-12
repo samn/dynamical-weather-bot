@@ -63,7 +63,7 @@ import {
 const geolocateBtn = document.getElementById("geolocate-btn") as HTMLButtonElement;
 const zipForm = document.getElementById("zip-form") as HTMLFormElement;
 const zipInput = document.getElementById("zip-input") as HTMLInputElement;
-const zipSubmitBtn = zipForm.querySelector("button[type=submit]") as HTMLButtonElement;
+
 const locationBar = document.getElementById("location-bar") as HTMLDivElement;
 const locationDisplay = document.getElementById("location-display") as HTMLDivElement;
 const locationResetBtn = document.getElementById("location-reset-btn") as HTMLButtonElement;
@@ -153,7 +153,6 @@ let hasSelectedLocation = false;
 
 function setButtonsDisabled(disabled: boolean): void {
   geolocateBtn.disabled = disabled;
-  zipSubmitBtn.disabled = disabled;
   zipInput.disabled = disabled;
 }
 

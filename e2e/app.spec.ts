@@ -119,7 +119,7 @@ test.describe("page load and initial state", () => {
     await expect(page.locator("h1")).toHaveText("72-Hour Probabilistic Forecast");
     await expect(page.locator("#geolocate-btn")).toBeVisible();
     await expect(page.locator("#zip-input")).toBeVisible();
-    await expect(page.locator("#zip-form button[type=submit]")).toBeVisible();
+
   });
 
   test("loading, error, and forecast sections are hidden initially", async ({ page }) => {

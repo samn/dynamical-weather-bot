@@ -10,6 +10,8 @@ Probabilistic weather forecast web app that fetches GEFS ensemble data from dyna
 
 Run `mise install` to set up the project toolchain (Node 24, prek). Then run `prek install` to install pre-commit hooks. See `mise.toml`.
 
+If `mise` is not available, ensure Node is installed and run `npm install` to install dependencies. The test suite includes Playwright e2e tests — if browsers are missing, run `npx playwright install chromium` before running checks.
+
 ## Commands
 
 - `npm run dev` — Start Vite dev server
@@ -27,9 +29,9 @@ Pre-commit hooks run oxlint, typecheck, and tests on all commits.
 
 ## Pre-commit Checks
 
-**IMPORTANT:** Before every commit, you MUST run `npm run check` and fix all errors. This runs formatting, type checking, linting, and tests. Do not commit until all checks pass. Do not skip or bypass these checks (e.g. never use `--no-verify`).
+**IMPORTANT:** Before every commit, you MUST run `npm run check` and fix all errors. This runs formatting, type checking, linting, and tests (including Playwright e2e tests). Do not commit until all checks pass. Do not skip or bypass these checks (e.g. never use `--no-verify`).
 
-**Workflow:** After making ANY code change, immediately run `npm run check` to verify correctness. Fix all failures before committing. Never commit without a passing `npm run check` first. When adding or modifying code that has test coverage, run `npx vitest run --coverage` to verify that coverage thresholds (90% for statements, branches, functions, and lines) are still met.
+**Workflow:** After making ANY code change, immediately run `npm run check` to verify correctness. If any step fails due to missing tools (e.g. `oxfmt` not found, Playwright browsers not installed), fix the environment first (see Setup) and re-run — do not treat infrastructure failures as "not my problem" and commit anyway. All steps must actually pass, not just the ones that happen to run. Fix all failures before committing. Never commit without a passing `npm run check` first. When adding or modifying code that has test coverage, run `npx vitest run --coverage` to verify that coverage thresholds (90% for statements, branches, functions, and lines) are still met.
 
 ## Architecture
 
