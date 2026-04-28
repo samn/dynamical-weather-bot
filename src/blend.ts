@@ -316,7 +316,14 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
       points: f[varKey],
       isEnsemble: f.isEnsemble,
     }));
-    result[varKey] = blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey]);
+    result[varKey] = blendVariable(
+      varKey,
+      inputs,
+      accuracy,
+      biases,
+      CLAMP_MIN[varKey],
+      CLAMP_MAX[varKey],
+    );
   }
 
   return {
@@ -336,6 +343,11 @@ const CLAMP_MIN: Partial<Record<ForecastVariable, number>> = {
   cloudCover: 0,
 };
 
+/** Clamp maximums for variables with a physical upper bound */
+const CLAMP_MAX: Partial<Record<ForecastVariable, number>> = {
+  cloudCover: 1,
+};
+
 /**
  * Blend a single forecast variable from multiple models.
  * Use this for progressive per-variable rendering.
@@ -351,7 +363,7 @@ export function blendSingleVariable(
   if (inputs.length === 1) return inputs[0]!.points;
   const accuracy = useAccuracy ? lookupAccuracy(location, grid) : undefined;
   const biases = useAccuracy ? lookupBiases(location, grid) : undefined;
-  return blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey]);
+  return blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey], CLAMP_MAX[varKey]);
 }
 
 /**
@@ -371,6 +383,7 @@ function blendVariable(
   accuracy: Record<string, Record<string, Record<string, number>>> | undefined,
   biases: Record<string, Record<string, Record<string, number>>> | undefined,
   clampMin?: number,
+  clampMax?: number,
 ): ForecastPoint[] {
   const accuracyVarKey = VARIABLE_KEYS[varKey] ?? "temperature_2m";
 
@@ -388,7 +401,12 @@ function blendVariable(
   }
 
   const ensembleModelIds = new Set(inputs.filter((i) => i.isEnsemble).map((i) => i.model));
-  const clamp = (v: number) => (clampMin !== undefined ? Math.max(clampMin, v) : v);
+  const clamp = (v: number) => {
+    let r = v;
+    if (clampMin !== undefined) r = Math.max(clampMin, r);
+    if (clampMax !== undefined) r = Math.min(clampMax, r);
+    return r;
+  };
 
   return baseInput.points.map((basePt) => {
     const hour = Math.round(basePt.hoursFromNow);
