@@ -98,7 +98,7 @@ function loadAccuracyGrid(): AccuracyGrid {
   try {
     // Bundled by Vite at build time via JSON import
     // Falls back to empty grid if not yet generated
-    return _accuracyGrid;
+    return accuracyGridState;
   } catch {
     return {
       gridResolution: 0.5,
@@ -108,7 +108,7 @@ function loadAccuracyGrid(): AccuracyGrid {
   }
 }
 
-let _accuracyGrid: AccuracyGrid = {
+let accuracyGridState: AccuracyGrid = {
   gridResolution: 0.5,
   bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
   cells: {},
@@ -118,7 +118,7 @@ let _accuracyGrid: AccuracyGrid = {
 try {
   import("./generated/accuracy-grid.json").then(
     (mod) => {
-      _accuracyGrid = mod.default as AccuracyGrid;
+      accuracyGridState = mod.default as AccuracyGrid;
     },
     () => {
       // Grid not generated yet — will use empty grid (GEFS-only weights)
