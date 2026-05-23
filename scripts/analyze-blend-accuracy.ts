@@ -14,7 +14,7 @@ const STATIONS_URL = "https://assets.dynamical.org/scorecard/stations.csv";
 /** 90-day window in nanoseconds */
 const WINDOW_90D = 7776000000000000;
 
-const MODELS = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS Single"] as const;
+const MODELS = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS ENS", "ECMWF AIFS Single"] as const;
 const VARIABLES = ["temperature_2m", "precipitation_surface"] as const;
 
 interface StationModelMetric {

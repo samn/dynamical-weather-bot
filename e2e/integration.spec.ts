@@ -328,7 +328,7 @@ test.describe("real forecast integration", () => {
     const ecmwf = modelInputs.temperature!.find((m) => m.model === "ECMWF IFS ENS")!;
     expect(ecmwf.isEnsemble).toBe(true);
     const aifs = modelInputs.temperature!.find((m) => m.model === "ECMWF AIFS")!;
-    expect(aifs.isEnsemble).toBe(false);
+    expect(aifs.isEnsemble).toBe(true);
 
     // Ensemble models should have uncertainty spread (min ≠ max for some valid points)
     const gefsValidPts = gefs.points.filter((pt) => pt.max != null && pt.min != null);
@@ -337,11 +337,9 @@ test.describe("real forecast integration", () => {
     const ecmwfValidPts = ecmwf.points.filter((pt) => pt.max != null && pt.min != null);
     const ecmwfHasSpread = ecmwfValidPts.some((pt) => pt.max - pt.min > 0.1);
     expect(ecmwfHasSpread, "ECMWF should have ensemble spread").toBe(true);
-
-    // Deterministic models should have no spread (min ≈ max) for valid points
     const aifsValidPts = aifs.points.filter((pt) => pt.max != null && pt.min != null);
-    const aifsNoSpread = aifsValidPts.every((pt) => Math.abs(pt.max - pt.min) < 0.01);
-    expect(aifsNoSpread, "AIFS should have no ensemble spread").toBe(true);
+    const aifsHasSpread = aifsValidPts.some((pt) => pt.max - pt.min > 0.1);
+    expect(aifsHasSpread, "AIFS ENS should have ensemble spread").toBe(true);
 
     // Per-model data should also pass basic range checks
     for (const input of modelInputs.temperature!) {

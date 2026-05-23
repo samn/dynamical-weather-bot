@@ -5,13 +5,14 @@ import {
   latToIndex,
   lonToIndex,
   coordToNumbers,
+  toForecastPoints,
   windSpeed,
   precipToMmHr,
   cloudCoverToFraction,
 } from "./weather.js";
 
 const AIFS_STORE_URL =
-  "https://dynamical-ecmwf-aifs-single.s3.us-west-2.amazonaws.com/ecmwf-aifs-single-forecast/v0.1.0.icechunk/";
+  "https://dynamical-ecmwf-aifs-ens.s3.us-west-2.amazonaws.com/ecmwf-aifs-ens-forecast/v0.1.0.icechunk/";
 
 /** Cached IcechunkStore instance */
 let storePromise: Promise<IcechunkStore> | null = null;
@@ -25,6 +26,9 @@ function getStore(): Promise<IcechunkStore> {
 
 /** Number of 6-hourly steps to cover 72 hours */
 const STEPS_72H = 12;
+
+/** Number of ECMWF AIFS ENS ensemble members (1 control + 50 perturbed) */
+const NUM_ENSEMBLE = 51;
 
 /** Fetch just the latest AIFS forecast init time (lightweight metadata check) */
 export async function fetchLatestAifsInitTime(): Promise<string> {
@@ -44,6 +48,7 @@ export interface AifsMetadata {
   leadTimeHours: number[];
   latIdx: number;
   lonIdx: number;
+  numEnsemble: number;
 }
 
 /** Fetch AIFS metadata (init time, lead times, grid indices) without fetching variable data */
@@ -57,7 +62,7 @@ export async function fetchAifsMetadata(location: LatLon): Promise<AifsMetadata>
     getLeadTimeHours(store, STEPS_72H),
   ]);
 
-  return { store, initIdx, initTime, leadTimeHours, latIdx, lonIdx };
+  return { store, initIdx, initTime, leadTimeHours, latIdx, lonIdx, numEnsemble: NUM_ENSEMBLE };
 }
 
 async function getLatestInitTimeIndex(
@@ -78,37 +83,42 @@ async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise
   return data.map((s) => s / 3600);
 }
 
-/** Convert raw values to ForecastPoints (deterministic — all percentiles equal the value) */
-function toPoints(values: number[], leadTimeHours: number[], initTime: Date): ForecastPoint[] {
-  const now = Date.now();
-  return values.map((val, t) => {
-    const hours = leadTimeHours[t] ?? t;
-    const time = new Date(initTime.getTime() + hours * 3600 * 1000);
-    return {
-      time: time.toISOString(),
-      hoursFromNow: (time.getTime() - now) / 3600000,
-      median: val,
-      p10: val,
-      p90: val,
-      min: val,
-      max: val,
-    };
-  });
-}
-
-/** Fetch a single variable from the AIFS store.
- *  AIFS dimensions: (init_time, lead_time, latitude, longitude) */
-async function fetchAifsVar(
+/**
+ * Fetch a single variable's forecast data for a specific grid point.
+ * Returns an array of values: [ensemble_member][lead_time_step]
+ *
+ * AIFS ENS dimensions: (init_time, lead_time, ensemble_member, latitude, longitude)
+ */
+async function fetchForecastVariable(
   store: IcechunkStore,
   varName: string,
-  initIdx: number,
+  initTimeIdx: number,
   latIdx: number,
   lonIdx: number,
+  numEnsembleMembers: number,
   numSteps: number,
-): Promise<number[]> {
+): Promise<number[][]> {
   const arr = await zarr.open(store.resolve(varName), { kind: "array" });
-  const result = await zarr.get(arr, [initIdx, zarr.slice(numSteps), latIdx, lonIdx]);
-  return Array.from(result.data as Float32Array);
+
+  const result = await zarr.get(arr, [
+    initTimeIdx,
+    zarr.slice(numSteps),
+    zarr.slice(numEnsembleMembers),
+    latIdx,
+    lonIdx,
+  ]);
+
+  const rawData = result.data as Float32Array;
+  // Shape is [numSteps, numEnsembleMembers] — transpose to [numEnsemble][numSteps]
+  const data: number[][] = [];
+  for (let e = 0; e < numEnsembleMembers; e++) {
+    const row: number[] = [];
+    for (let t = 0; t < numSteps; t++) {
+      row.push(rawData[t * numEnsembleMembers + e] ?? 0);
+    }
+    data.push(row);
+  }
+  return data;
 }
 
 /** Fetch a single forecast variable from AIFS using pre-fetched metadata */
@@ -116,41 +126,66 @@ export async function fetchAifsVariable(
   meta: AifsMetadata,
   variable: ForecastVariable,
 ): Promise<ForecastPoint[]> {
-  const { store, initIdx, latIdx, lonIdx, leadTimeHours, initTime } = meta;
+  const { store, initIdx, latIdx, lonIdx, numEnsemble, leadTimeHours, initTime } = meta;
   const steps = STEPS_72H;
 
   if (variable === "temperature") {
-    const data = await fetchAifsVar(store, "temperature_2m", initIdx, latIdx, lonIdx, steps);
-    return toPoints(data, leadTimeHours, initTime);
+    const data = await fetchForecastVariable(
+      store,
+      "temperature_2m",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      steps,
+    );
+    return toForecastPoints(data, leadTimeHours, initTime);
   }
 
   if (variable === "precipitation") {
-    const data = await fetchAifsVar(store, "precipitation_surface", initIdx, latIdx, lonIdx, steps);
-    return toPoints(data.map(precipToMmHr), leadTimeHours, initTime);
+    const data = await fetchForecastVariable(
+      store,
+      "precipitation_surface",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      steps,
+    );
+    return toForecastPoints(
+      data.map((row) => row.map(precipToMmHr)),
+      leadTimeHours,
+      initTime,
+    );
   }
 
   if (variable === "windSpeed") {
     const [uData, vData] = await Promise.all([
-      fetchAifsVar(store, "wind_u_10m", initIdx, latIdx, lonIdx, steps),
-      fetchAifsVar(store, "wind_v_10m", initIdx, latIdx, lonIdx, steps),
+      fetchForecastVariable(store, "wind_u_10m", initIdx, latIdx, lonIdx, numEnsemble, steps),
+      fetchForecastVariable(store, "wind_v_10m", initIdx, latIdx, lonIdx, numEnsemble, steps),
     ]);
-    const speeds = uData.map((u, i) => windSpeed(u, vData[i]!));
-    return toPoints(speeds, leadTimeHours, initTime);
+    const speedData = uData.map((uRow, e) => uRow.map((u, t) => windSpeed(u, vData[e]![t]!)));
+    return toForecastPoints(speedData, leadTimeHours, initTime);
   }
 
   // cloudCover
-  const data = await fetchAifsVar(
+  const data = await fetchForecastVariable(
     store,
     "total_cloud_cover_atmosphere",
     initIdx,
     latIdx,
     lonIdx,
+    numEnsemble,
     steps,
   );
-  return toPoints(data.map(cloudCoverToFraction), leadTimeHours, initTime);
+  return toForecastPoints(
+    data.map((row) => row.map(cloudCoverToFraction)),
+    leadTimeHours,
+    initTime,
+  );
 }
 
-/** Fetch the full 72-hour deterministic ECMWF AIFS forecast for a location */
+/** Fetch the full 72-hour probabilistic ECMWF AIFS ENS forecast for a location */
 export async function fetchAifsForecast(location: LatLon): Promise<ModelForecast> {
   const meta = await fetchAifsMetadata(location);
   const [temperature, precipitation, ws, cloudCover] = await Promise.all([
@@ -161,7 +196,7 @@ export async function fetchAifsForecast(location: LatLon): Promise<ModelForecast
   ]);
   return {
     model: "ECMWF AIFS",
-    isEnsemble: false,
+    isEnsemble: true,
     location,
     initTime: meta.initTime.toISOString(),
     temperature,

@@ -103,25 +103,44 @@ async function main() {
 
   console.log(`Parsed ${rows.length} statistic rows`);
 
-  // Map parquet model names to our internal ModelId strings
+  // Map parquet model names to our internal ModelId strings.
+  // Multiple parquet sources may map to the same ModelId (e.g. AIFS ENS preferred over AIFS Single).
   const PARQUET_TO_MODEL: Record<string, ModelId> = {
     "NOAA GEFS": "NOAA GEFS",
     "NOAA HRRR": "NOAA HRRR",
     "ECMWF IFS ENS": "ECMWF IFS ENS",
+    "ECMWF AIFS ENS": "ECMWF AIFS",
     "ECMWF AIFS Single": "ECMWF AIFS",
   };
+
+  // Source priority: when multiple parquet model names map to the same ModelId,
+  // lower-priority sources are overwritten by higher-priority ones (smaller number = higher priority).
+  // ECMWF AIFS ENS is preferred over ECMWF AIFS Single (use ensemble metrics when available).
+  const PARQUET_SOURCE_PRIORITY: Record<string, number> = {
+    "ECMWF AIFS ENS": 0,
+    "ECMWF AIFS Single": 1,
+  };
+
+  /** Combined priority: source rank takes precedence over metric rank.
+   *  Within a source, lower metric rank wins. */
+  function combinedPriority(source: string, metricRank: number): number {
+    return (PARQUET_SOURCE_PRIORITY[source] ?? 0) * 100 + metricRank;
+  }
 
   type StationMetrics = Record<string, Record<string, Record<string, number>>>; // model → variable → leadHours → value
   const stationMetrics = new Map<string, StationMetrics>();
   const stationBiases = new Map<string, StationMetrics>();
   const storedPriority = new Map<string, number>();
   const storedBiasPriority = new Map<string, number>();
+  const sourceRowCounts = new Map<string, number>();
+  const aifsSourceUseCount = new Map<string, number>();
   let uniqueCount = 0;
   let bcCount = 0;
 
   for (const r of rows) {
     const modelId = PARQUET_TO_MODEL[r.model];
     if (modelId === undefined) continue;
+    sourceRowCounts.set(r.model, (sourceRowCounts.get(r.model) ?? 0) + 1);
     // Check window (allow some tolerance for different representations)
     if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) continue;
     if (!isFinite(r.value)) continue;
@@ -134,12 +153,16 @@ async function main() {
     if (acceptedMetrics) {
       const metricPriority = acceptedMetrics.indexOf(r.metric);
       if (metricPriority >= 0 && r.value > 0) {
+        const newPriority = combinedPriority(r.model, metricPriority);
         const priorityKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}`;
         const existing = storedPriority.get(priorityKey);
-        if (existing === undefined || metricPriority < existing) {
+        if (existing === undefined || newPriority < existing) {
           if (existing === undefined) uniqueCount++;
           if (metricPriority === 0) bcCount++;
-          storedPriority.set(priorityKey, metricPriority);
+          storedPriority.set(priorityKey, newPriority);
+          if (modelId === "ECMWF AIFS") {
+            aifsSourceUseCount.set(r.model, (aifsSourceUseCount.get(r.model) ?? 0) + 1);
+          }
 
           let sm = stationMetrics.get(r.station_id);
           if (!sm) {
@@ -158,10 +181,11 @@ async function main() {
     if (acceptedBias) {
       const biasPriority = acceptedBias.indexOf(r.metric);
       if (biasPriority >= 0) {
+        const newBiasPriority = combinedPriority(r.model, biasPriority);
         const biasKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}|bias`;
         const existingBias = storedBiasPriority.get(biasKey);
-        if (existingBias === undefined || biasPriority < existingBias) {
-          storedBiasPriority.set(biasKey, biasPriority);
+        if (existingBias === undefined || newBiasPriority < existingBias) {
+          storedBiasPriority.set(biasKey, newBiasPriority);
 
           let sb = stationBiases.get(r.station_id);
           if (!sb) {
@@ -178,6 +202,19 @@ async function main() {
 
   console.log(`${uniqueCount} unique station/model/variable/lead combinations (${bcCount} bias-corrected)`);
   console.log(`${stationBiases.size} stations have bias data`);
+  console.log("Parquet model row counts:");
+  for (const [model, count] of [...sourceRowCounts.entries()].sort()) {
+    console.log(`  ${model}: ${count}`);
+  }
+  console.log("AIFS source usage (after priority resolution):");
+  for (const [src, count] of [...aifsSourceUseCount.entries()].sort()) {
+    console.log(`  ${src}: ${count}`);
+  }
+  if (aifsSourceUseCount.get("ECMWF AIFS Single") && !aifsSourceUseCount.get("ECMWF AIFS ENS")) {
+    console.warn(
+      "WARNING: parquet contains only 'ECMWF AIFS Single' rows — 'ECMWF AIFS ENS' not yet published in scorecard.",
+    );
+  }
 
   console.log(`${stationMetrics.size} stations have relevant metrics`);
 
