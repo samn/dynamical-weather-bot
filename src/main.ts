@@ -721,7 +721,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       const allInputs: ModelVariableInput[] = [
         { model: "NOAA GEFS", points: gefsPoints, isEnsemble: true },
         { model: "ECMWF IFS ENS", points: ecmwfPoints, isEnsemble: true },
-        { model: "ECMWF AIFS", points: aifsPoints, isEnsemble: false },
+        { model: "ECMWF AIFS", points: aifsPoints, isEnsemble: true },
       ];
       if (hrrrPoints) {
         allInputs.push({ model: "NOAA HRRR", points: hrrrPoints, isEnsemble: false });
