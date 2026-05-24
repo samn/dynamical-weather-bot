@@ -245,7 +245,7 @@ const MODEL_COLORS: Record<ModelId, string> = {
 const MODEL_SHORT_NAMES: Record<ModelId, string> = {
   "NOAA GEFS": "GEFS",
   "NOAA HRRR": "HRRR",
-  "ECMWF IFS ENS": "ECMWF",
+  "ECMWF IFS ENS": "IFS",
   "ECMWF AIFS": "AIFS",
 };
 
