@@ -50,6 +50,7 @@ import {
 } from "./chart.js";
 import { getCached, setCache } from "./cache.js";
 import { formatInitTime } from "./format.js";
+import { getLocationFromUrl, setLocationInUrl } from "./url-params.js";
 import {
   type UnitSystem,
   getUnitSystem,
@@ -777,21 +778,10 @@ async function loadForecast(location: LatLon): Promise<void> {
   }
 }
 
-/** Update the URL query parameter for zip code without reloading */
-function setZipInUrl(zip: string | null): void {
-  const url = new URL(window.location.href);
-  if (zip) {
-    url.searchParams.set("zip", zip);
-  } else {
-    url.searchParams.delete("zip");
-  }
-  window.history.replaceState(null, "", url.toString());
-}
-
-/** Read zip code from the current URL query parameters */
-function getZipFromUrl(): string | null {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("zip");
+/** Update the URL to reflect the current location selection (zip, coords, or none). */
+function setUrlLocation(params: import("./url-params.js").LocationParam | null): void {
+  const next = setLocationInUrl(window.location.href, params);
+  window.history.replaceState(null, "", next);
 }
 
 // When location selection is shown and user had a previous location, show back button
@@ -832,8 +822,12 @@ geolocateBtn.addEventListener("click", async () => {
   try {
     lastZip = null;
     showLoading();
-    setZipInUrl(null);
     const location = await getGeolocation();
+    setUrlLocation({
+      type: "coords",
+      latitude: location.latitude,
+      longitude: location.longitude,
+    });
     await loadForecast(location);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not get location";
@@ -848,7 +842,7 @@ zipForm.addEventListener("submit", async (e) => {
     lastZip = zip;
     showLoading();
     const location = await zipToLatLon(zip);
-    setZipInUrl(zip);
+    setUrlLocation({ type: "zip", zip });
     await loadForecast(location);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid ZIP code";
@@ -1036,16 +1030,22 @@ function toggleBlendMode(): void {
 magicBlendBtn.addEventListener("click", toggleBlendMode);
 equalBlendBtn.addEventListener("click", toggleBlendMode);
 
-// On load: if a zip code is in the URL, use it automatically
-const initialZip = getZipFromUrl();
-if (initialZip) {
-  lastZip = initialZip;
-  zipInput.value = initialZip;
-  zipToLatLon(initialZip).then(
+// On load: restore the location from URL params if present.
+const initialLocation = getLocationFromUrl(window.location.href);
+if (initialLocation?.type === "zip") {
+  lastZip = initialLocation.zip;
+  zipInput.value = initialLocation.zip;
+  zipToLatLon(initialLocation.zip).then(
     (location) => loadForecast(location),
     (err) => {
       const message = err instanceof Error ? err.message : "Invalid ZIP code";
       showError(message);
     },
   );
+} else if (initialLocation?.type === "coords") {
+  lastZip = null;
+  loadForecast({
+    latitude: initialLocation.latitude,
+    longitude: initialLocation.longitude,
+  });
 }
