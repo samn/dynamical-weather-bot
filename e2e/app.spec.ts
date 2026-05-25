@@ -215,10 +215,18 @@ test.describe("ZIP code input", () => {
     await expect(page.locator("#error")).toContainText("not found");
   });
 
-  test("buttons are disabled during loading", async ({ page }) => {
-    await blockZarrRequests(page);
-
-    // Use a delayed ZIP API response so we can observe the loading state
+  test("inputs stay enabled during loading so the user can switch locations", async ({ page }) => {
+    // Use a delayed ZIP API response so the load is genuinely in flight
+    // when we assert. Zarr requests are also delayed so the load doesn't
+    // race past us into an error state that re-enables the buttons.
+    await page.route("**/data.dynamical.org/**", async (route) => {
+      await new Promise((r) => setTimeout(r, 30_000));
+      await route.abort("blockedbyclient");
+    });
+    await page.route("**/*.s3.us-west-2.amazonaws.com/**", async (route) => {
+      await new Promise((r) => setTimeout(r, 30_000));
+      await route.abort("blockedbyclient");
+    });
     await page.route("**/api.zippopotam.us/**", async (route) => {
       await new Promise((r) => setTimeout(r, 3000));
       await route.fulfill({
@@ -243,9 +251,10 @@ test.describe("ZIP code input", () => {
 
     await page.fill("#zip-input", "10001");
 
-    // During loading, buttons should be disabled
-    await expect(page.locator("#geolocate-btn")).toBeDisabled();
-    await expect(page.locator("#zip-input")).toBeDisabled();
+    // Immediately after the submit, while the load is still pending,
+    // inputs must remain enabled so the user can change their mind.
+    await expect(page.locator("#geolocate-btn")).toBeEnabled({ timeout: 500 });
+    await expect(page.locator("#zip-input")).toBeEnabled({ timeout: 500 });
   });
 });
 
@@ -754,6 +763,37 @@ test.describe("location display and reset", () => {
     await expect(page.locator("#location-back-btn")).toBeVisible();
     // Globe reset button should be hidden
     await expect(page.locator("#location-reset-btn")).toHaveClass(/hidden/);
+  });
+
+  test("clicking globe mid-load reveals enabled inputs so user can switch", async ({ page }) => {
+    // Keep the Zarr requests pending for the duration of the test so the
+    // forecast load is genuinely in-flight when we click the globe icon.
+    await page.route("**/data.dynamical.org/**", async (route) => {
+      await new Promise((r) => setTimeout(r, 30_000));
+      await route.abort("blockedbyclient");
+    });
+    await page.route("**/*.s3.us-west-2.amazonaws.com/**", async (route) => {
+      await new Promise((r) => setTimeout(r, 30_000));
+      await route.abort("blockedbyclient");
+    });
+    await mockZipApi(page);
+    await page.goto("/");
+
+    await page.fill("#zip-input", "10001");
+
+    // Wait until the load has progressed to "location display + skeletons"
+    await expect(page.locator("#location-display")).not.toHaveClass(/hidden/);
+    await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
+
+    // Tap the globe icon to go back to location selection while the
+    // forecast load is still pending.
+    await page.click("#location-reset-btn");
+
+    // Location bar must be visible again with inputs enabled — even though
+    // the Zarr requests are still in-flight.
+    await expect(page.locator("#location-bar")).not.toHaveClass(/hidden/);
+    await expect(page.locator("#geolocate-btn")).toBeEnabled();
+    await expect(page.locator("#zip-input")).toBeEnabled();
   });
 
   test("back button restores previous forecast view", async ({ page }) => {
