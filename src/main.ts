@@ -804,6 +804,11 @@ locationResetBtn.addEventListener("click", () => {
   modelControlsEl.classList.add("hidden");
   errorEl.classList.add("hidden");
   loadingEl.classList.add("hidden");
+  // The user dismissed this location — don't keep it in the URL so a
+  // share/reload doesn't restore it.
+  setUrlLocation(null);
+  lastZip = null;
+  zipInput.value = "";
   showLocationSelectionWithBack();
 });
 
@@ -819,9 +824,13 @@ locationBackBtn.addEventListener("click", () => {
 
 // Event handlers
 geolocateBtn.addEventListener("click", async () => {
+  // Clear any stale prior selection up-front so a denied/cancelled
+  // geolocation prompt doesn't leave a previous ?zip=/?lat= in the URL.
+  lastZip = null;
+  zipInput.value = "";
+  setUrlLocation(null);
+  showLoading();
   try {
-    lastZip = null;
-    showLoading();
     const location = await getGeolocation();
     setUrlLocation({
       type: "coords",
@@ -838,9 +847,12 @@ geolocateBtn.addEventListener("click", async () => {
 zipForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const zip = zipInput.value.trim();
+  // Clear any stale prior selection up-front (same rationale as the
+  // geolocate handler).
+  setUrlLocation(null);
+  showLoading();
   try {
     lastZip = zip;
-    showLoading();
     const location = await zipToLatLon(zip);
     setUrlLocation({ type: "zip", zip });
     await loadForecast(location);
@@ -1044,8 +1056,12 @@ if (initialLocation?.type === "zip") {
   );
 } else if (initialLocation?.type === "coords") {
   lastZip = null;
+  zipInput.value = "";
   loadForecast({
     latitude: initialLocation.latitude,
     longitude: initialLocation.longitude,
+  }).catch((err) => {
+    const message = err instanceof Error ? err.message : "Could not load forecast";
+    showError(message);
   });
 }

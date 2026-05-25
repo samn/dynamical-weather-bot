@@ -87,6 +87,11 @@ describe("getLocationFromUrl", () => {
     expect(getLocationFromUrl(`${BASE}?lat=abc&lon=def`)).toBeNull();
   });
 
+  it("returns null for partial-numeric coordinates (parseFloat junk-tail)", () => {
+    expect(getLocationFromUrl(`${BASE}?lat=40.7abc&lon=-74xyz`)).toBeNull();
+    expect(getLocationFromUrl(`${BASE}?lat=40.7&lon=-74.0foo`)).toBeNull();
+  });
+
   it("returns null when only lat is present", () => {
     expect(getLocationFromUrl(`${BASE}?lat=40.7`)).toBeNull();
   });

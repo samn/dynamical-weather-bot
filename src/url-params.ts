@@ -38,11 +38,18 @@ export function getLocationFromUrl(currentUrl: string): LocationParam | null {
   const lonStr = params.get("lon");
   if (latStr === null || lonStr === null) return null;
 
-  const lat = parseFloat(latStr);
-  const lon = parseFloat(lonStr);
-  if (!isFinite(lat) || !isFinite(lon)) return null;
+  const lat = parseCoord(latStr);
+  const lon = parseCoord(lonStr);
+  if (lat === null || lon === null) return null;
   if (lat < -90 || lat > 90) return null;
   if (lon < -180 || lon > 180) return null;
 
   return { type: "coords", latitude: lat, longitude: lon };
+}
+
+/** Strict numeric parse — rejects trailing junk that parseFloat would silently accept. */
+function parseCoord(s: string): number | null {
+  if (!/^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  return isFinite(n) ? n : null;
 }
