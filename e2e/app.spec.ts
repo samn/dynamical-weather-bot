@@ -249,6 +249,200 @@ test.describe("ZIP code input", () => {
   });
 });
 
+test.describe("current location URL encoding", () => {
+  test("clicking Current Location writes lat/lon to the URL", async ({ browser }) => {
+    const context = await browser.newContext({
+      permissions: ["geolocation"],
+      geolocation: { latitude: 40.7484, longitude: -73.9967 },
+    });
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+    await page.goto("/");
+
+    await page.click("#geolocate-btn");
+
+    // URL should reflect the geolocated coordinates
+    await expect.poll(() => page.url()).toMatch(/[?&]lat=40\.7484/);
+    expect(page.url()).toMatch(/[&?]lon=-73\.9967/);
+    expect(page.url()).not.toContain("zip=");
+
+    await context.close();
+  });
+
+  test("reloading with lat/lon params restores the location", async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+
+    // Land directly on a URL with coords — simulates the round trip
+    // (initial visit set the params; the user later returns)
+    await page.goto("/?lat=40.7484&lon=-73.9967");
+
+    // Location label should show those coordinates without any ZIP prefix
+    await expect(page.locator("#location-label")).toContainText("40.75", {
+      timeout: 10000,
+    });
+    const label = await page.locator("#location-label").textContent();
+    expect(label).toMatch(/40\.75°N/);
+    expect(label).toMatch(/74\.00°W/);
+    expect(label).not.toMatch(/^\d{5}/); // no ZIP prefix
+
+    await context.close();
+  });
+
+  test("geolocate → reload round trip preserves the location", async ({ browser }) => {
+    const context = await browser.newContext({
+      permissions: ["geolocation"],
+      geolocation: { latitude: 37.7749, longitude: -122.4194 },
+    });
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+    await page.goto("/");
+
+    // Use geolocation
+    await page.click("#geolocate-btn");
+    await expect.poll(() => page.url()).toContain("lat=");
+
+    const urlAfterGeolocate = page.url();
+
+    // Reload the page — URL still has the coords, so the app should auto-load
+    await page.reload();
+
+    // Location label should reappear with the SF coords
+    await expect(page.locator("#location-label")).toContainText("37.77", {
+      timeout: 10000,
+    });
+    expect(page.url()).toBe(urlAfterGeolocate);
+
+    await context.close();
+  });
+
+  test("submitting a ZIP after geolocation replaces lat/lon with zip", async ({ browser }) => {
+    const context = await browser.newContext({
+      permissions: ["geolocation"],
+      geolocation: { latitude: 37.7749, longitude: -122.4194 },
+    });
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await page.goto("/");
+
+    await page.click("#geolocate-btn");
+    await expect.poll(() => page.url()).toContain("lat=");
+
+    // After a location is set the input is hidden behind the location
+    // display — click the reset button to surface the ZIP input again.
+    await page.click("#location-reset-btn");
+    await page.fill("#zip-input", "10001");
+    await expect.poll(() => page.url()).toContain("zip=10001");
+    expect(page.url()).not.toContain("lat=");
+    expect(page.url()).not.toContain("lon=");
+
+    await context.close();
+  });
+
+  test("denied geolocation clears any pre-existing ?zip= from the URL", async ({ browser }) => {
+    // No geolocation permission → click will reject
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+
+    // Use an INVALID zip so the auto-load fails before loadForecast hides
+    // the location bar — leaves the geolocate button reachable while the
+    // stale ?zip=00000 sits in the URL.
+    await page.goto("/?zip=00000");
+    await expect(page.locator("#error")).not.toHaveClass(/hidden/, {
+      timeout: 10000,
+    });
+    expect(page.url()).toContain("zip=00000");
+
+    // Now the user reaches for the geolocate button instead.
+    await page.click("#geolocate-btn");
+    await expect(page.locator("#error")).not.toHaveClass(/hidden/, {
+      timeout: 10000,
+    });
+
+    // The user's intent was to switch away from the ZIP — the stale ?zip=
+    // must NOT remain in the URL after a denied/cancelled geolocation.
+    expect(page.url()).not.toContain("zip=");
+
+    await context.close();
+  });
+
+  test("failed ZIP submit clears any pre-existing ?lat=&lon= from the URL", async ({ page }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+
+    // Out-of-range coords are ignored by the auto-load (location bar stays
+    // visible) but the params remain in the URL — exactly the stale state
+    // we want to test.
+    await page.goto("/?lat=999&lon=999");
+    await expect(page.locator("#location-bar")).toBeVisible();
+
+    // Inject the realistic stale-URL state (in-range coords) without
+    // triggering the auto-load.
+    await page.evaluate(() => {
+      history.replaceState(null, "", "/?lat=40.7484&lon=-73.9967");
+    });
+    expect(page.url()).toContain("lat=");
+
+    // 00000 returns 404 from the mock → zipToLatLon rejects.
+    await page.fill("#zip-input", "00000");
+    await expect(page.locator("#error")).not.toHaveClass(/hidden/, {
+      timeout: 10000,
+    });
+
+    expect(page.url()).not.toContain("lat=");
+    expect(page.url()).not.toContain("lon=");
+  });
+
+  test("location reset button clears location params from the URL", async ({ page }) => {
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+
+    await page.goto("/?zip=10001");
+    await expect(page.locator("#location-label")).toContainText("10001", {
+      timeout: 10000,
+    });
+
+    await page.click("#location-reset-btn");
+
+    // After reset, the dismissed location should not survive a share/reload.
+    expect(page.url()).not.toContain("zip=");
+    expect(page.url()).not.toContain("lat=");
+    expect(page.url()).not.toContain("lon=");
+  });
+
+  test("switching from ZIP to coords also clears the stale ZIP input value", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      permissions: ["geolocation"],
+      geolocation: { latitude: 37.7749, longitude: -122.4194 },
+    });
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+
+    await page.goto("/?zip=10001");
+    await expect(page.locator("#zip-input")).toHaveValue("10001");
+
+    // Surface the location-bar so geolocate-btn is reachable.
+    await page.click("#location-reset-btn");
+    await expect(page.locator("#zip-input")).toBeVisible();
+
+    await page.click("#geolocate-btn");
+    await expect.poll(() => page.url()).toContain("lat=");
+
+    // Re-surface the input to inspect it.
+    await page.click("#location-reset-btn");
+    await expect(page.locator("#zip-input")).toHaveValue("");
+
+    await context.close();
+  });
+});
+
 test.describe("unit toggle", () => {
   test("clicking metric button activates it", async ({ page }) => {
     await blockZarrRequests(page);
