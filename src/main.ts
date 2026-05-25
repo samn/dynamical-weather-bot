@@ -512,10 +512,9 @@ async function checkForNewerForecast(
       fetchEcmwfForecast(location),
       fetchAifsForecast(location),
     ]);
-    if (loadId !== currentLoadId) {
-      updatingIndicator.classList.add("hidden");
-      return;
-    }
+    // Bail if a newer load has started. Don't touch the indicator here —
+    // a concurrent newer load may have already taken ownership of it.
+    if (loadId !== currentLoadId) return;
 
     // Update cached per-model inputs
     hrrrAvailable = hrrrForecast !== null;
@@ -629,8 +628,10 @@ async function loadForecast(location: LatLon): Promise<void> {
   updateLocationLabel(location);
   showLocationDisplay();
 
-  // Clear stale aberrations immediately on location switch
+  // Clear stale aberrations and any in-progress "Updating forecast…"
+  // indicator from a prior load so they can't bleed into the new one.
   aberrationsEl.innerHTML = "";
+  updatingIndicator.classList.add("hidden");
 
   try {
     // Check cache first — if valid, render immediately without skeletons
