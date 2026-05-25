@@ -52,17 +52,20 @@ async function waitForForecastLoad(page: Page, timeout = 120_000): Promise<void>
       const error = document.getElementById("error");
       const forecast = document.getElementById("forecast");
       const initTime = document.getElementById("init-time-label");
-      const btn = document.getElementById("geolocate-btn") as HTMLButtonElement | null;
       const controls = document.getElementById("model-controls");
-      if (!error || !forecast || !initTime || !btn || !controls) return false;
+      if (!error || !forecast || !initTime || !controls) return false;
       // Error state reached
       if (!error.classList.contains("hidden")) return true;
-      // Full success: forecast visible, init time set, buttons enabled, controls visible
+      // Full success: forecast visible, init time set, controls visible, cache populated
+      // (cache is written only after all variable fetches complete).
+      const cacheRaw = localStorage.getItem("weather-cache");
+      const cacheHasEntry =
+        cacheRaw !== null && Object.keys(JSON.parse(cacheRaw) as object).length > 0;
       return (
         !forecast.classList.contains("hidden") &&
         initTime.textContent !== "" &&
-        !btn.disabled &&
-        !controls.classList.contains("hidden")
+        !controls.classList.contains("hidden") &&
+        cacheHasEntry
       );
     },
     { timeout },

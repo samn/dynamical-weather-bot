@@ -151,10 +151,13 @@ let lastZip: string | null = null;
 /** Whether user has selected a location (even if forecast hasn't loaded yet) */
 let hasSelectedLocation = false;
 
-function setButtonsDisabled(disabled: boolean): void {
-  geolocateBtn.disabled = disabled;
-  zipInput.disabled = disabled;
-}
+/**
+ * Monotonic id assigned to each `loadForecast` call. In-flight loads
+ * compare their captured id against this; if a newer load has started,
+ * they bail without touching cache or DOM. Zarr fetches themselves can't
+ * be aborted, so we just ignore stale results.
+ */
+let currentLoadId = 0;
 
 /** Hide location selection, show location display */
 function showLocationDisplay(): void {
@@ -165,7 +168,6 @@ function showLocationDisplay(): void {
 }
 
 function showLoading(): void {
-  setButtonsDisabled(true);
   loadingEl.classList.remove("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.add("hidden");
@@ -173,7 +175,6 @@ function showLoading(): void {
 }
 
 function showError(msg: string): void {
-  setButtonsDisabled(false);
   loadingEl.classList.add("hidden");
   errorEl.classList.remove("hidden");
   errorEl.textContent = msg;
@@ -181,7 +182,6 @@ function showError(msg: string): void {
 }
 
 function showForecast(): void {
-  setButtonsDisabled(false);
   loadingEl.classList.add("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.remove("hidden");
@@ -493,10 +493,12 @@ async function fetchLatestAnyInitTime(): Promise<string> {
 async function checkForNewerForecast(
   location: LatLon,
   knownInitTime: string,
-  forceRefetch = false,
+  forceRefetch: boolean,
+  loadId: number,
 ): Promise<void> {
   try {
     const latestInitTime = await fetchLatestAnyInitTime();
+    if (loadId !== currentLoadId) return;
     const isNewer = latestInitTime > knownInitTime;
     if (!forceRefetch && !isNewer) return;
 
@@ -510,6 +512,10 @@ async function checkForNewerForecast(
       fetchEcmwfForecast(location),
       fetchAifsForecast(location),
     ]);
+    if (loadId !== currentLoadId) {
+      updatingIndicator.classList.add("hidden");
+      return;
+    }
 
     // Update cached per-model inputs
     hrrrAvailable = hrrrForecast !== null;
@@ -568,7 +574,6 @@ async function checkForNewerForecast(
 
 /** Show forecast container with skeleton charts for progressive loading */
 function showSkeletonCharts(): void {
-  setButtonsDisabled(true);
   loadingEl.classList.add("hidden");
   errorEl.classList.add("hidden");
   forecastEl.classList.remove("hidden");
@@ -619,6 +624,7 @@ function updateBlendWeightsDisplay(): void {
 }
 
 async function loadForecast(location: LatLon): Promise<void> {
+  const loadId = ++currentLoadId;
   hasSelectedLocation = true;
   updateLocationLabel(location);
   showLocationDisplay();
@@ -634,8 +640,10 @@ async function loadForecast(location: LatLon): Promise<void> {
       showLoading();
       try {
         const latestInitTime = await fetchLatestAnyInitTime();
+        if (loadId !== currentLoadId) return;
         useCache = latestInitTime <= cached.forecast.initTime;
       } catch {
+        if (loadId !== currentLoadId) return;
         useCache = true;
       }
     }
@@ -659,7 +667,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       syncModelControls();
       renderCharts(cached.forecast);
       updateBlendWeightsDisplay();
-      checkForNewerForecast(location, cached.forecast.initTime, true);
+      checkForNewerForecast(location, cached.forecast.initTime, true, loadId);
       return;
     }
 
@@ -673,6 +681,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       fetchEcmwfMetadata(location),
       fetchAifsMetadata(location),
     ]);
+    if (loadId !== currentLoadId) return;
 
     // Show init time as soon as metadata is available
     const initTimes = [
@@ -715,6 +724,7 @@ async function loadForecast(location: LatLon): Promise<void> {
         fetchEcmwfVariable(ecmwfMeta, variable),
         fetchAifsVariable(aifsMeta, variable),
       ]);
+      if (loadId !== currentLoadId) return;
 
       // Cache ALL model inputs — update incrementally so controls work
       // on already-loaded variables while others are still fetching
@@ -741,10 +751,12 @@ async function loadForecast(location: LatLon): Promise<void> {
       // Animate skeleton out, then render real chart
       const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
       await stopChartSkeleton(canvas);
+      if (loadId !== currentLoadId) return;
       renderVariableChart(variable, blended);
     });
 
     await Promise.all(variablePromises);
+    if (loadId !== currentLoadId) return;
 
     // Build complete ForecastData
     const forecast: ForecastData = {
@@ -767,11 +779,11 @@ async function loadForecast(location: LatLon): Promise<void> {
 
     // Aberrations render after all data is available
     renderAberrations(detectAberrations(forecast, getUnitSystem()));
-    setButtonsDisabled(false);
     updateBlendWeightsDisplay();
 
-    checkForNewerForecast(location, forecast.initTime);
+    checkForNewerForecast(location, forecast.initTime, false, loadId);
   } catch (err) {
+    if (loadId !== currentLoadId) return;
     const message = err instanceof Error ? err.message : "Unknown error occurred";
     showError(`Failed to load forecast: ${message}`);
   }
