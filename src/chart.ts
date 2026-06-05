@@ -368,7 +368,7 @@ export function renderChartSkeleton(canvas: HTMLCanvasElement): void {
   canvas.width = rect.width * dpr;
   canvas.height = rect.height * dpr;
 
-  const maybeCtx = canvas.getContext("2d");
+  const maybeCtx = canvas.getContext("2d", { willReadFrequently: true });
   if (!maybeCtx) return;
   const ctx: CanvasRenderingContext2D = maybeCtx;
 
@@ -405,7 +405,7 @@ export function stopChartSkeleton(canvas: HTMLCanvasElement): Promise<void> {
   existing.stop = true;
 
   const dpr = window.devicePixelRatio || 1;
-  const maybeCtx = canvas.getContext("2d");
+  const maybeCtx = canvas.getContext("2d", { willReadFrequently: true });
   if (!maybeCtx) return Promise.resolve();
   const ctx: CanvasRenderingContext2D = maybeCtx;
 
@@ -543,7 +543,7 @@ export function renderChart(opts: ChartOptions): void {
   canvas.width = width;
   canvas.height = height;
 
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -881,7 +881,7 @@ function attachListeners(canvas: HTMLCanvasElement): void {
 function clearTooltip(canvas: HTMLCanvasElement): void {
   const state = chartStates.get(canvas);
   if (!state) return;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
   ctx.putImageData(state.baseImage, 0, 0);
 }
@@ -889,7 +889,7 @@ function clearTooltip(canvas: HTMLCanvasElement): void {
 function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
   const state = chartStates.get(canvas);
   if (!state) return;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
 
   const {
