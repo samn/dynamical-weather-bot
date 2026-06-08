@@ -29,9 +29,27 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
 
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+
+      # The browser download from cdn.playwright.dev intermittently stalls
+      # mid-transfer on the runner, and this Playwright version has no
+      # per-download timeout — a stuck socket hangs until the job ceiling.
+      # Bound each attempt with `timeout` and retry on a fresh connection.
+      # On a cache hit this just validates the existing browsers and exits.
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-        timeout-minutes: 8
+        run: |
+          for attempt in 1 2 3; do
+            echo "Playwright browser install attempt $attempt"
+            if timeout -k 10 300 npx playwright install chromium; then
+              exit 0
+            fi
+            echo "Attempt $attempt stalled or failed; retrying after backoff..."
+            sleep 5
+          done
+          echo "Playwright browser install failed after 3 attempts" >&2
+          exit 1
+        timeout-minutes: 15
 
       - name: Check formatting
         run: npm run fmt:check
