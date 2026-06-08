@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parquetRead } from "hyparquet";
+import { compressors } from "hyparquet-compressors";
 import { haversineKm } from "../src/geo.js";
 import type { ModelId } from "../src/types.js";
 import {
@@ -92,6 +93,7 @@ async function main() {
   const rows: StatRow[] = [];
   await parquetRead({
     file: parquetBuf,
+    compressors,
     onComplete: (data: unknown[][]) => {
       for (const row of data) {
         if (!Array.isArray(row)) continue;
