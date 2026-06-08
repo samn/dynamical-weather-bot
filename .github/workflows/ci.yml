@@ -19,8 +19,21 @@ jobs:
 
       - run: npm ci
 
+      - name: Get Playwright version
+        id: pw
+        run: echo "version=$(npm ls @playwright/test --json | jq -r '.dependencies["@playwright/test"].version')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
+
+      # timeout-minutes is a backstop: if a download/extraction ever hangs
+      # again, fail fast instead of burning the 6-hour job ceiling.
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+        timeout-minutes: 10
 
       - name: Check formatting
         run: npm run fmt:check
