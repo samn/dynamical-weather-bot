@@ -255,6 +255,108 @@ button:hover {
   flex-shrink: 0;
 }
 
+/* Load status (first-load progress) */
+#load-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+#load-status-models {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.model-chip {
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.model-chip::after {
+  content: "\2026"; /* ellipsis while loading */
+  margin-left: 0.25rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.model-chip.done {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.model-chip.done::after {
+  content: "\2713";
+  animation: none;
+}
+
+.model-chip.unavailable {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.model-chip.unavailable::after {
+  content: "";
+  animation: none;
+}
+
+/* Chart legend (shared across all charts) */
+#chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem 1.25rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.legend-swatch-line {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-muted);
+}
+
+.legend-swatch-dark {
+  background: rgba(139, 143, 163, 0.45);
+}
+
+.legend-swatch-light {
+  background: rgba(139, 143, 163, 0.18);
+}
+
+#legend-per-model-note {
+  display: none;
+}
+
+#chart-legend.per-model .legend-item {
+  display: none;
+}
+
+#chart-legend.per-model #legend-per-model-note {
+  display: inline;
+}
+
 /* Model controls */
 #model-controls {
   display: flex;

@@ -371,11 +371,12 @@ test.describe("real forecast integration", () => {
       expect(hasContent, `${chartId} should have rendered content`).toBe(true);
     }
 
-    // Chart headers
+    // Chart headers — once rendered, titles include the display unit
+    // (except cloud cover, whose values are already percentages)
     const titles = page.locator(".chart-header h2");
-    await expect(titles.nth(0)).toHaveText("Temperature");
-    await expect(titles.nth(1)).toHaveText("Precipitation");
-    await expect(titles.nth(2)).toHaveText("Wind Speed");
+    await expect(titles.nth(0)).toHaveText(/^Temperature \(°[FC]\)$/);
+    await expect(titles.nth(1)).toHaveText(/^Precipitation \((in|mm)\/h\)$/);
+    await expect(titles.nth(2)).toHaveText(/^Wind Speed \((mph|m\/s)\)$/);
     await expect(titles.nth(3)).toHaveText("Cloud Cover");
 
     // All chart canvases should have reasonable dimensions
