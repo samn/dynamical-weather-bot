@@ -262,6 +262,9 @@ export function computeXLabelTimes(
 const chartStates = new WeakMap<HTMLCanvasElement, ChartState>();
 const listenersAttached = new WeakSet<HTMLCanvasElement>();
 
+/** All rendered chart canvases, so hover can sync a crosshair across them */
+const registeredCharts = new Set<HTMLCanvasElement>();
+
 /** Active skeleton animation state, keyed by canvas */
 const skeletonAnimations = new WeakMap<HTMLCanvasElement, { stop: boolean }>();
 
@@ -593,6 +596,35 @@ export function renderChart(opts: ChartOptions): void {
   // Clear
   ctx.clearRect(0, 0, displayWidth, displayHeight);
 
+  // Time markers (midnight, sunrise, sunset) — computed up front so night
+  // shading can be drawn behind the data
+  const markers =
+    latitude !== undefined && longitude !== undefined
+      ? computeTimeMarkers(xMinMs, xMaxMs, latitude, longitude)
+      : [];
+
+  // Night shading between sunset and sunrise (behind everything). Skipped
+  // on charts with intensity bands — those already fill the plot area, and
+  // stacking both background layers turns the chart into a patchwork.
+  const sunEvents = markers.filter((m) => m.type === "sunrise" || m.type === "sunset");
+  if (sunEvents.length > 0 && !hasBands) {
+    ctx.fillStyle = "rgba(5, 7, 12, 0.35)";
+    let nightStart: number | null = sunEvents[0]!.type === "sunrise" ? xMinMs : null;
+    for (const ev of sunEvents) {
+      if (ev.type === "sunset") {
+        nightStart = ev.timeMs;
+      } else if (nightStart !== null) {
+        const x1 = timeToX(nightStart);
+        ctx.fillRect(x1, padding.top, timeToX(ev.timeMs) - x1, chartHeight);
+        nightStart = null;
+      }
+    }
+    if (nightStart !== null) {
+      const x1 = timeToX(nightStart);
+      ctx.fillRect(x1, padding.top, timeToX(xMaxMs) - x1, chartHeight);
+    }
+  }
+
   // Draw intensity band shading (behind everything)
   if (hasBands) {
     for (const band of intensityBands) {
@@ -618,39 +650,45 @@ export function renderChart(opts: ChartOptions): void {
   const seriesToDraw = hasOverlays
     ? convertedOverlays.map((s) => ({ data: s.data, color: s.color }))
     : [{ data, color }];
-  const minMaxAlpha = hasOverlays ? 0.06 : 0.08;
-  const p10p90Alpha = hasOverlays ? 0.12 : 0.2;
+  // With several models overlaid, translucent bands stack into mud — draw
+  // medians only. Bands return when a single series is shown (blended view
+  // or one model soloed).
+  const drawBands = seriesToDraw.length === 1;
+  const minMaxAlpha = 0.08;
+  const p10p90Alpha = 0.2;
 
   for (const series of seriesToDraw) {
-    // Draw min-max band
-    ctx.fillStyle = hexToRgba(series.color, minMaxAlpha);
-    ctx.beginPath();
-    for (let i = 0; i < series.data.length; i++) {
-      const x = timeToX(series.data[i]!.timeMs);
-      const y = yScale(series.data[i]!.max);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    for (let i = series.data.length - 1; i >= 0; i--) {
-      ctx.lineTo(timeToX(series.data[i]!.timeMs), yScale(series.data[i]!.min));
-    }
-    ctx.closePath();
-    ctx.fill();
+    if (drawBands) {
+      // Draw min-max band
+      ctx.fillStyle = hexToRgba(series.color, minMaxAlpha);
+      ctx.beginPath();
+      for (let i = 0; i < series.data.length; i++) {
+        const x = timeToX(series.data[i]!.timeMs);
+        const y = yScale(series.data[i]!.max);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      for (let i = series.data.length - 1; i >= 0; i--) {
+        ctx.lineTo(timeToX(series.data[i]!.timeMs), yScale(series.data[i]!.min));
+      }
+      ctx.closePath();
+      ctx.fill();
 
-    // Draw P10-P90 band
-    ctx.fillStyle = hexToRgba(series.color, p10p90Alpha);
-    ctx.beginPath();
-    for (let i = 0; i < series.data.length; i++) {
-      const x = timeToX(series.data[i]!.timeMs);
-      const y = yScale(series.data[i]!.p90);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      // Draw P10-P90 band
+      ctx.fillStyle = hexToRgba(series.color, p10p90Alpha);
+      ctx.beginPath();
+      for (let i = 0; i < series.data.length; i++) {
+        const x = timeToX(series.data[i]!.timeMs);
+        const y = yScale(series.data[i]!.p90);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      for (let i = series.data.length - 1; i >= 0; i--) {
+        ctx.lineTo(timeToX(series.data[i]!.timeMs), yScale(series.data[i]!.p10));
+      }
+      ctx.closePath();
+      ctx.fill();
     }
-    for (let i = series.data.length - 1; i >= 0; i--) {
-      ctx.lineTo(timeToX(series.data[i]!.timeMs), yScale(series.data[i]!.p10));
-    }
-    ctx.closePath();
-    ctx.fill();
 
     // Draw median line
     ctx.strokeStyle = series.color;
@@ -666,6 +704,14 @@ export function renderChart(opts: ChartOptions): void {
   }
 
   ctx.restore(); // remove data clip
+
+  // Dim hours already in the past so attention goes to what's ahead
+  const nowMs = Date.now();
+  if (nowMs > xMinMs) {
+    const pastEndX = timeToX(Math.min(nowMs, xMaxMs));
+    ctx.fillStyle = "rgba(15, 17, 23, 0.45)";
+    ctx.fillRect(padding.left, padding.top, pastEndX - padding.left, chartHeight);
+  }
 
   // Draw axes
   ctx.strokeStyle = "#2a2d3a";
@@ -735,7 +781,7 @@ export function renderChart(opts: ChartOptions): void {
   }
 
   // "Now" marker — vertical dashed line at current time
-  const now = Date.now();
+  const now = nowMs;
   if (now >= xMinMs && now <= xMaxMs) {
     const nowX = timeToX(now);
     ctx.save();
@@ -755,11 +801,10 @@ export function renderChart(opts: ChartOptions): void {
     ctx.fillText("now", nowX, padding.top - 1);
   }
 
-  // Time markers — sunrise and sunset only
-  if (latitude !== undefined && longitude !== undefined) {
-    const markers = computeTimeMarkers(xMinMs, xMaxMs, latitude, longitude).filter(
-      (m) => m.type === "sunrise" || m.type === "sunset",
-    );
+  // Time markers — sunrise/sunset lines plus midnight day boundaries
+  if (markers.length > 0) {
+    const sunMarkers = markers.filter((m) => m.type === "sunrise" || m.type === "sunset");
+    const midnightMarkers = markers.filter((m) => m.type === "midnight");
     const iconSize = compact ? 8 : 10;
 
     // Clip lines to the chart area so they don't bleed past the y-axis
@@ -768,7 +813,19 @@ export function renderChart(opts: ChartOptions): void {
     ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
     ctx.clip();
 
-    for (const marker of markers) {
+    // Midnight day-boundary lines (solid, subtle) make day-to-day
+    // scanning easier
+    for (const marker of midnightMarkers) {
+      const mx = timeToX(marker.timeMs);
+      ctx.strokeStyle = "#6b739440";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(mx, padding.top);
+      ctx.lineTo(mx, padding.top + chartHeight);
+      ctx.stroke();
+    }
+
+    for (const marker of sunMarkers) {
       const mx = timeToX(marker.timeMs);
       const style = MARKER_STYLES[marker.type];
 
@@ -785,7 +842,7 @@ export function renderChart(opts: ChartOptions): void {
     }
     ctx.restore(); // remove clip
 
-    for (const marker of markers) {
+    for (const marker of sunMarkers) {
       const mx = timeToX(marker.timeMs);
       // Only draw icon if it's fully within the chart area
       if (mx - iconSize / 2 >= padding.left && mx + iconSize / 2 <= padding.left + chartWidth) {
@@ -823,6 +880,7 @@ export function renderChart(opts: ChartOptions): void {
     overlaySeries: convertedOverlays.length > 0 ? convertedOverlays : undefined,
   });
 
+  registeredCharts.add(canvas);
   if (!listenersAttached.has(canvas)) {
     attachListeners(canvas);
     listenersAttached.add(canvas);
@@ -878,12 +936,68 @@ function attachListeners(canvas: HTMLCanvasElement): void {
   canvas.style.cursor = "crosshair";
 }
 
-function clearTooltip(canvas: HTMLCanvasElement): void {
+/** Restore a single canvas to its rendered state (no tooltip/crosshair) */
+function restoreBaseImage(canvas: HTMLCanvasElement): void {
   const state = chartStates.get(canvas);
   if (!state) return;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
   ctx.putImageData(state.baseImage, 0, 0);
+}
+
+function clearTooltip(_canvas: HTMLCanvasElement): void {
+  // Crosshairs are synced across charts, so clear them everywhere
+  for (const c of registeredCharts) {
+    restoreBaseImage(c);
+  }
+}
+
+/**
+ * Draw a synced crosshair (vertical line + median dots) on a chart that is
+ * not the one being hovered. No tooltip box — just enough to line up the
+ * same moment across all charts.
+ */
+function drawSyncedCrosshair(canvas: HTMLCanvasElement, timeMs: number): void {
+  const state = chartStates.get(canvas);
+  if (!state) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return;
+
+  ctx.putImageData(state.baseImage, 0, 0);
+  if (timeMs < state.xMinMs || timeMs > state.xMaxMs) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const { padding, chartHeight, yMin, yMax, timeToX } = state;
+  const x = timeToX(timeMs);
+  ctx.strokeStyle = "#ffffff40";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, padding.top);
+  ctx.lineTo(x, padding.top + chartHeight);
+  ctx.stroke();
+
+  const yScale = (v: number): number =>
+    padding.top + (1 - (v - yMin) / (yMax - yMin)) * chartHeight;
+  const seriesList = state.overlaySeries ?? [{ data: state.data, color: state.color, label: "" }];
+  for (const series of seriesList) {
+    let idx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < series.data.length; i++) {
+      const dist = Math.abs(series.data[i]!.timeMs - timeMs);
+      if (dist < bestDist) {
+        bestDist = dist;
+        idx = i;
+      }
+    }
+    const p = series.data[idx];
+    if (!p) continue;
+    ctx.fillStyle = series.color;
+    ctx.beginPath();
+    ctx.arc(timeToX(p.timeMs), yScale(p.median), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
@@ -1037,6 +1151,13 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
   for (let i = 0; i < lines.length; i++) {
     ctx.fillStyle = i === 0 ? "#8b8fa3" : "#e4e6ed";
     ctx.fillText(lines[i]!, tooltipX + tooltipPadH, tooltipY + tooltipPadV + i * lineHeight);
+  }
+
+  // Mirror the crosshair onto the other charts at the same moment
+  for (const other of registeredCharts) {
+    if (other !== canvas) {
+      drawSyncedCrosshair(other, point.timeMs);
+    }
   }
 }
 

@@ -601,19 +601,17 @@ test.describe("chart section structure", () => {
     await expect(titles.nth(3)).toHaveText("Cloud Cover");
   });
 
-  test("chart legends contain median, p10-p90, and min-max text", async ({ page }) => {
+  test("shared chart legend explains median and uncertainty bands", async ({ page }) => {
     await blockZarrRequests(page);
     await page.goto("/");
 
-    const legends = page.locator(".chart-legend");
-    await expect(legends).toHaveCount(4);
+    const legend = page.locator("#chart-legend");
+    await expect(legend).toHaveCount(1);
 
-    for (let i = 0; i < 4; i++) {
-      const text = await legends.nth(i).textContent();
-      expect(text).toContain("median");
-      expect(text).toContain("p10-p90");
-      expect(text).toContain("min-max");
-    }
+    const text = (await legend.textContent())!.replace(/\s+/g, " ");
+    expect(text).toContain("median");
+    expect(text).toContain("likely range (10–90%)");
+    expect(text).toContain("full range (min–max)");
   });
 });
 

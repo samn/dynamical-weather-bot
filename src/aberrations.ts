@@ -1,4 +1,5 @@
 import type { ForecastData, Aberration } from "./types.js";
+import { formatDayPart } from "./format.js";
 import { type UnitSystem, formatTemp, msToMph } from "./units.js";
 
 /** Clamp a value to [0, 1] */
@@ -36,12 +37,16 @@ export function detectAberrations(
     if (tempRange > 15) {
       const minIndex = forecast.temperature.findIndex((p) => p.median === minMedianTemp);
       const maxIndex = forecast.temperature.findIndex((p) => p.median === maxMedianTemp);
+      const firstIndex = Math.min(minIndex, maxIndex);
+      const secondIndex = Math.max(minIndex, maxIndex);
       const firstTemp = minIndex <= maxIndex ? minMedianTemp : maxMedianTemp;
       const secondTemp = minIndex <= maxIndex ? maxMedianTemp : minMedianTemp;
+      const firstWhen = formatDayPart(forecast.temperature[firstIndex]!.time);
+      const secondWhen = formatDayPart(forecast.temperature[secondIndex]!.time);
       aberrations.push({
         type: "danger",
         icon: "\u{1F321}\u{FE0F}",
-        message: `Large temperature swing expected: ${formatTemp(firstTemp, units)} to ${formatTemp(secondTemp, units)}`,
+        message: `Large temperature swing expected: ${formatTemp(firstTemp, units)} (${firstWhen}) to ${formatTemp(secondTemp, units)} (${secondWhen})`,
       });
     }
   }
@@ -63,10 +68,11 @@ export function detectAberrations(
         message: `Persistent precipitation expected: avg ${fmtPrecip(avgForecastPrecip)}`,
       });
     } else if (maxPrecipP90 > PRECIP_HIGH_THRESHOLD) {
+      const peak = forecast.precipitation.find((p) => p.p90 === maxPrecipP90)!;
       aberrations.push({
         type: "rain",
         icon: "\u{1F327}\u{FE0F}",
-        message: `Heavy rain possible: up to ${fmtPrecip(maxPrecipP90)} (90th percentile)`,
+        message: `Heavy rain possible ${formatDayPart(peak.time)}: up to ${fmtPrecip(maxPrecipP90)} (90th percentile)`,
       });
     }
   }
@@ -78,10 +84,11 @@ export function detectAberrations(
     const fmtWind = (v: number) =>
       imperial ? `${msToMph(v).toFixed(0)} mph` : `${v.toFixed(1)} m/s`;
     if (maxWindP90 > WIND_HIGH_THRESHOLD) {
+      const peak = forecast.windSpeed.find((p) => p.p90 === maxWindP90)!;
       aberrations.push({
         type: "danger",
         icon: "\u{1F32C}\u{FE0F}",
-        message: `Strong winds expected: gusts up to ${fmtWind(maxWindP90)}`,
+        message: `Strong winds expected ${formatDayPart(peak.time)}: gusts up to ${fmtWind(maxWindP90)}`,
       });
     }
   }

@@ -1,10 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { detectAberrations } from "./aberrations.js";
+import { formatDayPart } from "./format.js";
 import type { ForecastData, ForecastPoint } from "./types.js";
+
+/** Local-time base so day-part assertions are timezone-independent */
+const BASE_TIME = new Date(2026, 2, 4, 0, 0, 0);
+
+/** ISO timestamp for a given number of hours after the local base time */
+function pointTime(hoursFromNow: number): string {
+  return new Date(BASE_TIME.getTime() + hoursFromNow * 3600_000).toISOString();
+}
 
 function makePoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
-    time: "2026-03-04T00:00:00.000Z",
+    time: pointTime(overrides.hoursFromNow ?? 0),
     hoursFromNow: 0,
     median: 20,
     p10: 18,
@@ -67,8 +76,10 @@ describe("detectAberrations", () => {
     const result = detectAberrations(forecast);
     const swing = result.find((a) => a.message.includes("swing"));
     expect(swing).toBeDefined();
-    // Median 5°C occurs first chronologically, so message should show cold→warm
-    expect(swing!.message).toMatch(/5\.0°C to 30\.0°C/);
+    // Median 5°C occurs first chronologically, so message should show cold→warm,
+    // each endpoint annotated with when it occurs
+    expect(swing!.message).toContain(`5.0°C (${formatDayPart(pointTime(0))})`);
+    expect(swing!.message).toContain(`to 30.0°C (${formatDayPart(pointTime(36))})`);
   });
 
   it("detects large temperature swings in chronological order (warm first)", () => {
@@ -88,7 +99,8 @@ describe("detectAberrations", () => {
     const swing = result.find((a) => a.message.includes("swing"));
     expect(swing).toBeDefined();
     // Median 30°C occurs first chronologically, so message should show warm→cold
-    expect(swing!.message).toMatch(/30\.0°C to 5\.0°C/);
+    expect(swing!.message).toContain(`30.0°C (${formatDayPart(pointTime(0))})`);
+    expect(swing!.message).toContain(`to 5.0°C (${formatDayPart(pointTime(36))})`);
   });
 
   it("does not flag temperature swing when range is small", () => {
@@ -96,14 +108,23 @@ describe("detectAberrations", () => {
     expect(result.some((a) => a.message.includes("swing"))).toBe(false);
   });
 
-  it("detects heavy rain possible (p90 spike)", () => {
+  it("detects heavy rain possible (p90 spike) with timing of the peak", () => {
     const forecast = makeForecast({
       precipitation: Array.from({ length: 24 }, (_, i) =>
-        makePoint({ median: 0.5, p10: 0, p90: 3, min: 0, max: 5, hoursFromNow: i * 3 }),
+        makePoint({
+          median: 0.5,
+          p10: 0,
+          p90: i === 10 ? 3 : 1,
+          min: 0,
+          max: 5,
+          hoursFromNow: i * 3,
+        }),
       ),
     });
     const result = detectAberrations(forecast);
-    expect(result.some((a) => a.type === "rain")).toBe(true);
+    const rain = result.find((a) => a.type === "rain");
+    expect(rain).toBeDefined();
+    expect(rain!.message).toContain(`Heavy rain possible ${formatDayPart(pointTime(30))}`);
   });
 
   it("detects persistent precipitation", () => {
@@ -116,14 +137,23 @@ describe("detectAberrations", () => {
     expect(result.some((a) => a.type === "rain" && a.message.includes("Persistent"))).toBe(true);
   });
 
-  it("detects strong winds", () => {
+  it("detects strong winds with timing of the peak", () => {
     const forecast = makeForecast({
       windSpeed: Array.from({ length: 24 }, (_, i) =>
-        makePoint({ median: 8, p10: 6, p90: 12, min: 4, max: 15, hoursFromNow: i * 3 }),
+        makePoint({
+          median: 8,
+          p10: 6,
+          p90: i === 6 ? 12 : 8,
+          min: 4,
+          max: 15,
+          hoursFromNow: i * 3,
+        }),
       ),
     });
     const result = detectAberrations(forecast);
-    expect(result.some((a) => a.type === "danger")).toBe(true);
+    const wind = result.find((a) => a.type === "danger");
+    expect(wind).toBeDefined();
+    expect(wind!.message).toContain(`Strong winds expected ${formatDayPart(pointTime(18))}`);
   });
 
   it("detects clearing skies within the forecast window", () => {

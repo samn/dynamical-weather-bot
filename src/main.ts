@@ -93,6 +93,9 @@ const perModelViewBtn = document.getElementById("per-model-view-btn") as HTMLBut
 const infoToggle = document.getElementById("info-toggle") as HTMLAnchorElement;
 const infoPanel = document.getElementById("info-panel") as HTMLDivElement;
 const blendWeightsInfo = document.getElementById("blend-weights-info") as HTMLParagraphElement;
+const loadStatusEl = document.getElementById("load-status") as HTMLDivElement;
+const loadStatusModelsEl = document.getElementById("load-status-models") as HTMLSpanElement;
+const chartLegendEl = document.getElementById("chart-legend") as HTMLDivElement;
 
 /** Load bundled accuracy grid data, or return empty grid if not available */
 function loadAccuracyGrid(): AccuracyGrid {
@@ -316,6 +319,15 @@ function renderVariableChart(
   overlaySeries?: ChartOverlaySeries[],
 ): void {
   const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
+  const opts = chartOptsForVariable(variable);
+
+  // Show the unit in the chart title so it's visible even when compact
+  // mode drops units from the y-axis tick labels
+  const title = canvas.closest(".chart-container")?.querySelector("h2");
+  if (title) {
+    title.textContent = opts.unit ? `${opts.label} (${opts.unit})` : opts.label;
+  }
+
   renderChart({
     canvas,
     data,
@@ -323,7 +335,7 @@ function renderVariableChart(
     latitude: cachedLocation?.latitude,
     longitude: cachedLocation?.longitude,
     overlaySeries,
-    ...chartOptsForVariable(variable),
+    ...opts,
   });
 }
 
@@ -450,6 +462,9 @@ function syncModelControls(): void {
   // Hide blend toggle in per-model mode (blending doesn't apply)
   blendToggle.classList.toggle("hidden", viewMode === "per-model");
 
+  // Swap the shared chart legend to its per-model explanation
+  chartLegendEl.classList.toggle("per-model", viewMode === "per-model");
+
   // Color model labels in per-model mode so they serve as a legend
   const checkboxMap: Array<[HTMLInputElement, ModelId]> = [
     [modelGefsCheckbox, "NOAA GEFS"],
@@ -572,6 +587,56 @@ async function checkForNewerForecast(
   }
 }
 
+/** Number of variables each model must deliver before its chip is "done" */
+const VARIABLE_COUNT = 4;
+
+/** Per-model count of loaded variables for the first-load progress chips */
+let modelLoadCounts = new Map<ModelId, number>();
+
+/** Show the first-load status line with one pending chip per model */
+function initLoadProgress(models: ModelId[]): void {
+  modelLoadCounts = new Map(models.map((m) => [m, 0]));
+  loadStatusModelsEl.innerHTML = "";
+  for (const m of models) {
+    const chip = document.createElement("span");
+    chip.className = "model-chip";
+    chip.dataset.model = m;
+    chip.textContent = MODEL_SHORT_NAMES[m];
+    loadStatusModelsEl.appendChild(chip);
+  }
+  loadStatusEl.classList.remove("hidden");
+}
+
+function loadProgressChip(model: ModelId): HTMLElement | null {
+  return loadStatusModelsEl.querySelector(`[data-model="${model}"]`);
+}
+
+function hideLoadProgressIfComplete(): void {
+  const allDone = [...modelLoadCounts.values()].every((c) => c >= VARIABLE_COUNT);
+  if (allDone) loadStatusEl.classList.add("hidden");
+}
+
+/** Record one loaded variable for a model; mark its chip done at 4/4 */
+function markModelVariableLoaded(model: ModelId): void {
+  const count = (modelLoadCounts.get(model) ?? 0) + 1;
+  modelLoadCounts.set(model, count);
+  if (count >= VARIABLE_COUNT) {
+    loadProgressChip(model)?.classList.add("done");
+  }
+  hideLoadProgressIfComplete();
+}
+
+/** Mark a model's chip unavailable so it doesn't block completion */
+function markModelUnavailable(model: ModelId): void {
+  modelLoadCounts.set(model, VARIABLE_COUNT);
+  loadProgressChip(model)?.classList.add("unavailable");
+  hideLoadProgressIfComplete();
+}
+
+function hideLoadProgress(): void {
+  loadStatusEl.classList.add("hidden");
+}
+
 /** Show forecast container with skeleton charts for progressive loading */
 function showSkeletonCharts(): void {
   loadingEl.classList.add("hidden");
@@ -580,6 +645,7 @@ function showSkeletonCharts(): void {
   forecastMetaBar.classList.remove("hidden");
   aberrationsEl.innerHTML = "";
   initTimeLabel.textContent = "";
+  initLoadProgress(["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]);
 
   const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
   for (const v of variables) {
@@ -651,6 +717,7 @@ async function loadForecast(location: LatLon): Promise<void> {
     }
 
     if (useCache && cached) {
+      hideLoadProgress();
       lastForecast = cached.forecast;
       cachedLocation = location;
       cachedInitTime = cached.forecast.initTime;
@@ -697,6 +764,7 @@ async function loadForecast(location: LatLon): Promise<void> {
 
     // Track HRRR availability and update model controls
     hrrrAvailable = hrrrMeta !== null;
+    if (!hrrrMeta) markModelUnavailable("NOAA HRRR");
     syncModelControls();
     modelControlsEl.classList.remove("hidden");
 
@@ -720,45 +788,67 @@ async function loadForecast(location: LatLon): Promise<void> {
     const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
 
     const variablePromises = variables.map(async (variable) => {
-      const [gefsPoints, hrrrPoints, ecmwfPoints, aifsPoints] = await Promise.all([
-        fetchGefsVariable(gefsMeta, variable),
-        hrrrMeta ? fetchHrrrVariable(hrrrMeta, variable) : Promise.resolve(null),
-        fetchEcmwfVariable(ecmwfMeta, variable),
-        fetchAifsVariable(aifsMeta, variable),
-      ]);
-      if (loadId !== currentLoadId) return;
-
-      // Cache ALL model inputs — update incrementally so controls work
-      // on already-loaded variables while others are still fetching
-      const allInputs: ModelVariableInput[] = [
-        { model: "NOAA GEFS", points: gefsPoints, isEnsemble: true },
-        { model: "ECMWF IFS ENS", points: ecmwfPoints, isEnsemble: true },
-        { model: "ECMWF AIFS", points: aifsPoints, isEnsemble: true },
+      const modelFetches: Array<{
+        model: ModelId;
+        isEnsemble: boolean;
+        fetch: Promise<import("./types.js").ForecastPoint[] | null>;
+      }> = [
+        { model: "NOAA GEFS", isEnsemble: true, fetch: fetchGefsVariable(gefsMeta, variable) },
+        {
+          model: "ECMWF IFS ENS",
+          isEnsemble: true,
+          fetch: fetchEcmwfVariable(ecmwfMeta, variable),
+        },
+        { model: "ECMWF AIFS", isEnsemble: true, fetch: fetchAifsVariable(aifsMeta, variable) },
       ];
-      if (hrrrPoints) {
-        allInputs.push({ model: "NOAA HRRR", points: hrrrPoints, isEnsemble: false });
+      if (hrrrMeta) {
+        modelFetches.push({
+          model: "NOAA HRRR",
+          isEnsemble: false,
+          fetch: fetchHrrrVariable(hrrrMeta, variable),
+        });
       }
-      cachedModelInputs!.set(variable, allInputs);
 
-      if (!cachedTimeRange) {
-        updateCachedTimeRange(cachedModelInputs!);
-      }
-
-      // Blend only enabled models for display
-      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
-      const toBlend = filtered.length > 0 ? filtered : allInputs;
-      const blended = blendSingleVariable(variable, toBlend, location, grid, useMagic);
-      results[variable] = blended;
-
-      // Animate skeleton out, then render real chart
+      // Keep a fixed model order regardless of arrival order so blending
+      // stays deterministic and matches later reblends
+      const slotOrder: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS", "NOAA HRRR"];
+      const arrived = new Map<ModelId, ModelVariableInput>();
       const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
-      await stopChartSkeleton(canvas);
-      if (loadId !== currentLoadId) return;
-      renderVariableChart(variable, blended);
+      let skeletonGone: Promise<void> | null = null;
+
+      // Render the chart as soon as the first model's data arrives, then
+      // re-blend and re-render as each remaining model lands
+      await Promise.all(
+        modelFetches.map(async (mf) => {
+          const points = await mf.fetch;
+          if (loadId !== currentLoadId) return;
+
+          if (points) {
+            arrived.set(mf.model, { model: mf.model, points, isEnsemble: mf.isEnsemble });
+            // Cache incrementally so controls work on already-loaded
+            // variables while others are still fetching
+            const inputs = slotOrder.filter((m) => arrived.has(m)).map((m) => arrived.get(m)!);
+            cachedModelInputs!.set(variable, inputs);
+            updateCachedTimeRange(cachedModelInputs!);
+
+            const filtered = inputs.filter((i) => enabledModels.has(i.model));
+            const toBlend = filtered.length > 0 ? filtered : inputs;
+            const blended = blendSingleVariable(variable, toBlend, location, grid, useMagic);
+            results[variable] = blended;
+
+            skeletonGone ??= stopChartSkeleton(canvas);
+            await skeletonGone;
+            if (loadId !== currentLoadId) return;
+            renderVariableChart(variable, blended);
+          }
+          markModelVariableLoaded(mf.model);
+        }),
+      );
     });
 
     await Promise.all(variablePromises);
     if (loadId !== currentLoadId) return;
+    hideLoadProgress();
 
     // Build complete ForecastData
     const forecast: ForecastData = {

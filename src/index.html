@@ -58,6 +58,12 @@
       </div>
       <div id="error" class="hidden"></div>
       <div id="forecast" class="hidden">
+        <div id="load-status" class="hidden">
+          <span id="load-status-text"
+            >Fetching forecast models &mdash; first load can take a minute</span
+          >
+          <span id="load-status-models"></span>
+        </div>
         <div id="model-controls" class="hidden">
           <div id="model-checkboxes">
             <span
@@ -99,32 +105,45 @@
           </div>
         </div>
         <section id="aberrations"></section>
+        <div id="chart-legend">
+          <span class="legend-item"
+            ><span class="legend-swatch legend-swatch-line"></span> median</span
+          >
+          <span class="legend-item"
+            ><span class="legend-swatch legend-swatch-dark"></span> likely range
+            (10&ndash;90%)</span
+          >
+          <span class="legend-item"
+            ><span class="legend-swatch legend-swatch-light"></span> full range
+            (min&ndash;max)</span
+          >
+          <span id="legend-per-model-note"
+            >lines show each model's median &mdash; select a single model to see its uncertainty
+            bands</span
+          >
+        </div>
         <section id="charts">
           <div class="chart-container">
             <div class="chart-header">
               <h2>Temperature</h2>
-              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="temp-chart"></canvas>
           </div>
           <div class="chart-container">
             <div class="chart-header">
               <h2>Precipitation</h2>
-              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="precip-chart"></canvas>
           </div>
           <div class="chart-container">
             <div class="chart-header">
               <h2>Wind Speed</h2>
-              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="wind-chart"></canvas>
           </div>
           <div class="chart-container">
             <div class="chart-header">
               <h2>Cloud Cover</h2>
-              <span class="chart-legend">&#9473; median &#9619; p10-p90 &#9617; min-max</span>
             </div>
             <canvas id="cloud-chart"></canvas>
           </div>

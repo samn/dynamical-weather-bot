@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatInitTime } from "./format.js";
+import { formatDayPart, formatInitTime } from "./format.js";
 
 describe("formatInitTime", () => {
   it("includes 'Forecast initialized' prefix", () => {
@@ -31,5 +31,42 @@ describe("formatInitTime", () => {
   it("handles different months correctly", () => {
     expect(formatInitTime("2026-12-25T18:00:00.000Z")).toContain("Dec");
     expect(formatInitTime("2026-06-15T06:00:00.000Z")).toContain("Jun");
+  });
+});
+
+// Construct dates in local time so day-part boundaries are
+// timezone-independent; derive the expected weekday the same way
+// formatDayPart does so the assertion is locale-independent.
+const weekday = (d: Date) => d.toLocaleDateString(undefined, { weekday: "short" });
+
+describe("formatDayPart", () => {
+  it("labels pre-dawn hours as 'early <day>'", () => {
+    const d = new Date(2026, 2, 4, 2, 0, 0);
+    expect(formatDayPart(d)).toBe(`early ${weekday(d)}`);
+  });
+
+  it("labels 5 AM to noon as morning", () => {
+    const d = new Date(2026, 2, 4, 9, 0, 0);
+    expect(formatDayPart(d)).toBe(`${weekday(d)} morning`);
+  });
+
+  it("labels noon to 5 PM as afternoon", () => {
+    const d = new Date(2026, 2, 4, 13, 30, 0);
+    expect(formatDayPart(d)).toBe(`${weekday(d)} afternoon`);
+  });
+
+  it("labels 5 PM to 9 PM as evening", () => {
+    const d = new Date(2026, 2, 4, 18, 0, 0);
+    expect(formatDayPart(d)).toBe(`${weekday(d)} evening`);
+  });
+
+  it("labels 9 PM onward as night", () => {
+    const d = new Date(2026, 2, 4, 22, 0, 0);
+    expect(formatDayPart(d)).toBe(`${weekday(d)} night`);
+  });
+
+  it("accepts an ISO string", () => {
+    const d = new Date(2026, 2, 4, 9, 0, 0);
+    expect(formatDayPart(d.toISOString())).toBe(`${weekday(d)} morning`);
   });
 });
