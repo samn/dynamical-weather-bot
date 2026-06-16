@@ -271,6 +271,7 @@ function chartOptsForVariable(variable: ForecastVariable): {
   intensityBands?: IntensityBand[];
   yClampMin?: number;
   yClampMax?: number;
+  showDailyExtremes?: boolean;
 } {
   const imperial = getUnitSystem() === "imperial";
   switch (variable) {
@@ -281,6 +282,7 @@ function chartOptsForVariable(variable: ForecastVariable): {
         color: "#f5a623",
         convertValue: imperial ? celsiusToFahrenheit : undefined,
         formatValue: (v) => v.toFixed(0),
+        showDailyExtremes: true,
       };
     case "precipitation":
       return {

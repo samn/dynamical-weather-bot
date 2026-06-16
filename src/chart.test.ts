@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { computeXLabelTimes, computeYRange, timeMarkerLabel } from "./chart.js";
+import {
+  computeDailyExtremes,
+  computeXLabelTimes,
+  computeYRange,
+  timeMarkerLabel,
+} from "./chart.js";
 
 /** Helper: create a local-time Date. */
 function localDate(
@@ -211,6 +216,61 @@ describe("computeYRange", () => {
     // Overall range: min=1, max=8, pad=0.7
     expect(yMin).toBeCloseTo(0.3, 5);
     expect(yMax).toBeCloseTo(8.7, 5);
+  });
+});
+
+const mk = (d: Date, median: number) => ({ timeMs: d.getTime(), median });
+
+describe("computeDailyExtremes", () => {
+  it("returns an empty array for no data", () => {
+    expect(computeDailyExtremes([])).toEqual([]);
+  });
+
+  it("finds the high and low per local day", () => {
+    const data = [
+      mk(localDate(2026, 4, 1, 6), 10),
+      mk(localDate(2026, 4, 1, 14), 20),
+      mk(localDate(2026, 4, 1, 22), 12),
+      mk(localDate(2026, 4, 2, 3), 5),
+      mk(localDate(2026, 4, 2, 15), 18),
+    ];
+    const res = computeDailyExtremes(data);
+    expect(res).toHaveLength(2);
+    expect(res[0]!.high.value).toBe(20);
+    expect(res[0]!.low.value).toBe(10);
+    expect(res[1]!.high.value).toBe(18);
+    expect(res[1]!.low.value).toBe(5);
+  });
+
+  it("records the time at which each extreme occurs", () => {
+    const highTime = localDate(2026, 4, 1, 15);
+    const lowTime = localDate(2026, 4, 1, 5);
+    const data = [mk(lowTime, 8), mk(localDate(2026, 4, 1, 10), 14), mk(highTime, 22)];
+    const [day] = computeDailyExtremes(data);
+    expect(day!.high.timeMs).toBe(highTime.getTime());
+    expect(day!.low.timeMs).toBe(lowTime.getTime());
+  });
+
+  it("sorts days chronologically regardless of input order", () => {
+    const data = [
+      mk(localDate(2026, 4, 3, 12), 15),
+      mk(localDate(2026, 4, 1, 12), 10),
+      mk(localDate(2026, 4, 2, 12), 12),
+    ];
+    const res = computeDailyExtremes(data);
+    expect(res.map((d) => d.dayMs)).toEqual([
+      localDate(2026, 4, 1).getTime(),
+      localDate(2026, 4, 2).getTime(),
+      localDate(2026, 4, 3).getTime(),
+    ]);
+  });
+
+  it("treats a single-point day as high === low at the same time", () => {
+    const t = localDate(2026, 4, 1, 9);
+    const [day] = computeDailyExtremes([mk(t, 17)]);
+    expect(day!.high.value).toBe(17);
+    expect(day!.low.value).toBe(17);
+    expect(day!.high.timeMs).toBe(day!.low.timeMs);
   });
 });
 
