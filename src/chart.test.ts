@@ -265,6 +265,24 @@ describe("computeDailyExtremes", () => {
     ]);
   });
 
+  it("ignores points outside the given visible range", () => {
+    // Pre-dawn low and late high fall outside the window and must not
+    // become the day's extremes (they'd render off the visible line).
+    const data = [
+      mk(localDate(2026, 4, 1, 5), 50), // before range → excluded
+      mk(localDate(2026, 4, 1, 9), 62),
+      mk(localDate(2026, 4, 1, 15), 78),
+      mk(localDate(2026, 4, 1, 21), 90), // after range → excluded
+    ];
+    const range: [number, number] = [
+      localDate(2026, 4, 1, 8).getTime(),
+      localDate(2026, 4, 1, 16).getTime(),
+    ];
+    const [day] = computeDailyExtremes(data, range);
+    expect(day!.low.value).toBe(62);
+    expect(day!.high.value).toBe(78);
+  });
+
   it("treats a single-point day as high === low at the same time", () => {
     const t = localDate(2026, 4, 1, 9);
     const [day] = computeDailyExtremes([mk(t, 17)]);

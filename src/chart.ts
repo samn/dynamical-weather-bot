@@ -496,13 +496,19 @@ export interface DailyExtreme {
  * Group forecast points into local calendar days and find each day's
  * highest and lowest value (by median). Days are grouped using the
  * browser's local timezone so they line up with the x-axis day labels.
+ * An optional [minMs, maxMs] range restricts the scan to points visible
+ * on the chart, so every extreme falls on the drawn median line.
  * Exported for testing.
  */
 export function computeDailyExtremes(
   data: readonly { timeMs: number; median: number }[],
+  range?: [number, number],
 ): DailyExtreme[] {
+  const minMs = range ? range[0] : -Infinity;
+  const maxMs = range ? range[1] : Infinity;
   const byDay = new Map<number, DailyExtreme>();
   for (const p of data) {
+    if (p.timeMs < minMs || p.timeMs > maxMs) continue;
     const d = new Date(p.timeMs);
     const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const existing = byDay.get(dayMs);
@@ -963,7 +969,7 @@ export function renderChart(opts: ChartOptions): void {
   if (showDailyExtremes && convertedOverlays.length === 0 && data.length > 0) {
     drawDailyExtremeLabels(
       ctx,
-      computeDailyExtremes(data),
+      computeDailyExtremes(data, [xMinMs, xMaxMs]),
       timeToX,
       yScale,
       formatValue,
