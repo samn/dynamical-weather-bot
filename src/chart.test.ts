@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { computeXLabelTimes, computeYRange, timeMarkerLabel } from "./chart.js";
+import {
+  computeDailyExtremes,
+  computeXLabelTimes,
+  computeYRange,
+  timeMarkerLabel,
+} from "./chart.js";
 
 /** Helper: create a local-time Date. */
 function localDate(
@@ -211,6 +216,120 @@ describe("computeYRange", () => {
     // Overall range: min=1, max=8, pad=0.7
     expect(yMin).toBeCloseTo(0.3, 5);
     expect(yMax).toBeCloseTo(8.7, 5);
+  });
+});
+
+const mk = (d: Date, median: number) => ({ timeMs: d.getTime(), median });
+
+describe("computeDailyExtremes", () => {
+  it("returns an empty array for no data", () => {
+    expect(computeDailyExtremes([])).toEqual([]);
+  });
+
+  it("finds each day's high (peak) and low (trough)", () => {
+    // Two days, each with an interior peak and trough
+    const data = [
+      mk(localDate(2026, 4, 1, 0), 12),
+      mk(localDate(2026, 4, 1, 6), 8), // day 1 trough
+      mk(localDate(2026, 4, 1, 12), 20), // day 1 peak
+      mk(localDate(2026, 4, 1, 18), 14),
+      mk(localDate(2026, 4, 2, 0), 10),
+      mk(localDate(2026, 4, 2, 6), 6), // day 2 trough
+      mk(localDate(2026, 4, 2, 12), 22), // day 2 peak
+      mk(localDate(2026, 4, 2, 18), 16),
+    ];
+    const res = computeDailyExtremes(data);
+    expect(res).toHaveLength(2);
+    expect(res[0]!.high!.value).toBe(20);
+    expect(res[0]!.low!.value).toBe(8);
+    expect(res[1]!.high!.value).toBe(22);
+    expect(res[1]!.low!.value).toBe(6);
+  });
+
+  it("records the time at which each extreme occurs", () => {
+    const lowTime = localDate(2026, 4, 1, 6);
+    const highTime = localDate(2026, 4, 1, 12);
+    const data = [
+      mk(localDate(2026, 4, 1, 0), 14),
+      mk(lowTime, 8),
+      mk(highTime, 22),
+      mk(localDate(2026, 4, 1, 18), 12),
+    ];
+    const [day] = computeDailyExtremes(data);
+    expect(day!.high!.timeMs).toBe(highTime.getTime());
+    expect(day!.low!.timeMs).toBe(lowTime.getTime());
+  });
+
+  it("sorts days chronologically regardless of input order", () => {
+    // Each day: trough then peak then descend, so both extremes are interior
+    const day = (d: number) => [
+      mk(localDate(2026, 4, d, 0), 15),
+      mk(localDate(2026, 4, d, 6), 9),
+      mk(localDate(2026, 4, d, 12), 21),
+      mk(localDate(2026, 4, d, 18), 13),
+    ];
+    const data = [...day(3), ...day(1), ...day(2)];
+    const res = computeDailyExtremes(data);
+    expect(res.map((d) => d.dayMs)).toEqual([
+      localDate(2026, 4, 1).getTime(),
+      localDate(2026, 4, 2).getTime(),
+      localDate(2026, 4, 3).getTime(),
+    ]);
+  });
+
+  it("shows a visible afternoon high even on a partial first day, but omits the off-screen morning low", () => {
+    // Today: the window starts at "now" (late morning); temps climb to an
+    // afternoon peak then fall. The morning low happened before "now".
+    const data = [
+      mk(localDate(2026, 4, 1, 11), 60), // window start ("now")
+      mk(localDate(2026, 4, 1, 14), 70),
+      mk(localDate(2026, 4, 1, 17), 78), // visible peak
+      mk(localDate(2026, 4, 1, 20), 72),
+      mk(localDate(2026, 4, 1, 23), 65),
+    ];
+    const range: [number, number] = [
+      localDate(2026, 4, 1, 11).getTime(),
+      localDate(2026, 4, 1, 23).getTime(),
+    ];
+    const [day] = computeDailyExtremes(data, range);
+    expect(day!.high!.value).toBe(78);
+    expect(day!.low).toBeUndefined();
+  });
+
+  it("omits a high still rising at the right edge but keeps a visible trough", () => {
+    const data = [
+      mk(localDate(2026, 4, 1, 0), 20),
+      mk(localDate(2026, 4, 1, 6), 12), // visible trough
+      mk(localDate(2026, 4, 1, 12), 16),
+      mk(localDate(2026, 4, 1, 18), 24), // last point, still rising → off-screen peak
+    ];
+    const range: [number, number] = [
+      localDate(2026, 4, 1, 0).getTime(),
+      localDate(2026, 4, 1, 18).getTime(),
+    ];
+    const [day] = computeDailyExtremes(data, range);
+    expect(day!.low!.value).toBe(12);
+    expect(day!.high).toBeUndefined();
+  });
+
+  it("ignores points outside the visible range when finding the peak", () => {
+    const data = [
+      mk(localDate(2026, 4, 1, 0), 10),
+      mk(localDate(2026, 4, 1, 6), 20), // visible peak
+      mk(localDate(2026, 4, 1, 12), 14),
+      mk(localDate(2026, 4, 1, 18), 30), // off-window — must not be chosen
+    ];
+    const range: [number, number] = [
+      localDate(2026, 4, 1, 0).getTime(),
+      localDate(2026, 4, 1, 15).getTime(),
+    ];
+    const [day] = computeDailyExtremes(data, range);
+    expect(day!.high!.value).toBe(20);
+  });
+
+  it("reports nothing for a day with too few points to confirm a turning point", () => {
+    const t = localDate(2026, 4, 1, 9);
+    expect(computeDailyExtremes([mk(t, 17)])).toEqual([]);
   });
 });
 

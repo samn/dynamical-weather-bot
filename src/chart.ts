@@ -45,6 +45,8 @@ interface ChartOptions {
   yClampMax?: number;
   /** Additional data series to overlay (per-model mode) */
   overlaySeries?: ChartOverlaySeries[];
+  /** Label each day's high/low value on the median line (e.g. temperature) */
+  showDailyExtremes?: boolean;
 }
 
 interface ChartState {
@@ -482,6 +484,139 @@ export function computeYRange(
   return { yMin, yMax };
 }
 
+/** A single day's high and/or low value, with the time each extreme occurs.
+ *  Either side is omitted when that extreme isn't visible on the chart. */
+export interface DailyExtreme {
+  /** Local start-of-day timestamp (ms) used to group the day */
+  dayMs: number;
+  high?: { timeMs: number; value: number };
+  low?: { timeMs: number; value: number };
+}
+
+/**
+ * Group forecast points into local calendar days and find each day's
+ * highest and lowest value (by median). Days are grouped using the
+ * browser's local timezone so they line up with the x-axis day labels.
+ *
+ * A [minMs, maxMs] range restricts the scan to points visible on the
+ * chart. An extreme is only reported when it's a genuine turning point
+ * *within* that visible window — i.e. it has neighbours on both sides
+ * that confirm it as a peak (high) or trough (low). This drops extremes
+ * sitting at the window edges, whose true value may lie off-screen
+ * (e.g. this morning's low before "now", or an afternoon high still
+ * rising past the right edge), while still showing today's high the
+ * moment its peak is on screen. Exported for testing.
+ */
+export function computeDailyExtremes(
+  data: readonly { timeMs: number; median: number }[],
+  range?: [number, number],
+): DailyExtreme[] {
+  const minMs = range ? range[0] : -Infinity;
+  const maxMs = range ? range[1] : Infinity;
+  const visible = data.filter((p) => p.timeMs >= minMs && p.timeMs <= maxMs);
+
+  // Per day, track the index (within `visible`) of the highest/lowest point
+  const byDay = new Map<number, { highIdx: number; lowIdx: number }>();
+  for (let i = 0; i < visible.length; i++) {
+    const p = visible[i]!;
+    const d = new Date(p.timeMs);
+    const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const e = byDay.get(dayMs);
+    if (!e) {
+      byDay.set(dayMs, { highIdx: i, lowIdx: i });
+    } else {
+      if (p.median > visible[e.highIdx]!.median) e.highIdx = i;
+      if (p.median < visible[e.lowIdx]!.median) e.lowIdx = i;
+    }
+  }
+
+  // A turning point needs an in-window neighbour on each side; points at
+  // the window edge can't be confirmed (the curve may continue off-screen)
+  const isPeak = (i: number): boolean =>
+    i > 0 &&
+    i < visible.length - 1 &&
+    visible[i - 1]!.median <= visible[i]!.median &&
+    visible[i + 1]!.median <= visible[i]!.median;
+  const isTrough = (i: number): boolean =>
+    i > 0 &&
+    i < visible.length - 1 &&
+    visible[i - 1]!.median >= visible[i]!.median &&
+    visible[i + 1]!.median >= visible[i]!.median;
+
+  const days: DailyExtreme[] = [];
+  for (const [dayMs, e] of byDay) {
+    const hi = visible[e.highIdx]!;
+    const lo = visible[e.lowIdx]!;
+    const high = isPeak(e.highIdx) ? { timeMs: hi.timeMs, value: hi.median } : undefined;
+    const low = isTrough(e.lowIdx) ? { timeMs: lo.timeMs, value: lo.median } : undefined;
+    if (high || low) days.push({ dayMs, high, low });
+  }
+  days.sort((a, b) => a.dayMs - b.dayMs);
+  return days;
+}
+
+/** Warm/cool label colours for daily high/low markers */
+const HIGH_LABEL_COLOR = "#ffb86b";
+const LOW_LABEL_COLOR = "#7fb8ff";
+
+/**
+ * Draw a per-day high/low value label on the chart. Each extreme gets a
+ * small dot anchored at the point plus a haloed value above (high) or
+ * below (low) so it stays legible over bands and shading.
+ */
+function drawDailyExtremeLabels(
+  ctx: CanvasRenderingContext2D,
+  extremes: DailyExtreme[],
+  timeToX: (ms: number) => number,
+  yScale: (v: number) => number,
+  formatValue: (v: number) => string,
+  bounds: { left: number; top: number; width: number; height: number },
+  compact: boolean,
+): void {
+  const fontSize = compact ? 10 : 12;
+  ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.lineJoin = "round";
+  const right = bounds.left + bounds.width;
+  const bottom = bounds.top + bounds.height;
+  const gap = 6;
+
+  const drawLabel = (timeMs: number, value: number, above: boolean): void => {
+    const x0 = timeToX(timeMs);
+    const y0 = yScale(value);
+    const text = `${formatValue(value)}°`;
+    const color = above ? HIGH_LABEL_COLOR : LOW_LABEL_COLOR;
+
+    // Anchor dot at the actual extreme point
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x0, y0, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Keep the label fully inside the plot area
+    const halfW = ctx.measureText(text).width / 2;
+    const x = Math.max(bounds.left + halfW + 2, Math.min(right - halfW - 2, x0));
+    ctx.textBaseline = above ? "bottom" : "top";
+    let y = above ? y0 - gap : y0 + gap;
+    if (above) y = Math.max(bounds.top + fontSize, y);
+    else y = Math.min(bottom - fontSize, y);
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(15, 17, 23, 0.85)";
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  };
+
+  for (const day of extremes) {
+    if (day.high) drawLabel(day.high.timeMs, day.high.value, true);
+    // Skip the low if it coincides with the high (a lone flat point)
+    if (day.low && day.low.timeMs !== day.high?.timeMs) {
+      drawLabel(day.low.timeMs, day.low.value, false);
+    }
+  }
+}
+
 /**
  * Render a probabilistic forecast chart on a canvas element.
  * Shows:
@@ -507,6 +642,7 @@ export function renderChart(opts: ChartOptions): void {
     yClampMin,
     yClampMax,
     overlaySeries: rawOverlaySeries,
+    showDailyExtremes,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -853,6 +989,20 @@ export function renderChart(opts: ChartOptions): void {
         }
       }
     }
+  }
+
+  // Per-day high/low labels (single-series only — overlaid models would
+  // each have their own extremes, which turns into clutter)
+  if (showDailyExtremes && convertedOverlays.length === 0 && data.length > 0) {
+    drawDailyExtremeLabels(
+      ctx,
+      computeDailyExtremes(data, [xMinMs, xMaxMs]),
+      timeToX,
+      yScale,
+      formatValue,
+      { left: padding.left, top: padding.top, width: chartWidth, height: chartHeight },
+      compact,
+    );
   }
 
   // Save base image and chart state for tooltip interaction
