@@ -484,12 +484,13 @@ export function computeYRange(
   return { yMin, yMax };
 }
 
-/** A single day's high and low value, with the time each extreme occurs */
+/** A single day's high and/or low value, with the time each extreme occurs.
+ *  Either side is omitted when that extreme isn't visible on the chart. */
 export interface DailyExtreme {
   /** Local start-of-day timestamp (ms) used to group the day */
   dayMs: number;
-  high: { timeMs: number; value: number };
-  low: { timeMs: number; value: number };
+  high?: { timeMs: number; value: number };
+  low?: { timeMs: number; value: number };
 }
 
 /**
@@ -497,40 +498,58 @@ export interface DailyExtreme {
  * highest and lowest value (by median). Days are grouped using the
  * browser's local timezone so they line up with the x-axis day labels.
  *
- * When a [minMs, maxMs] range is given, only days that fall *entirely*
- * within it are returned. Partial days at either edge are dropped: their
- * true extreme may lie beyond what's displayed (e.g. an afternoon high
- * past the right edge), so labelling them would be misleading.
- * Exported for testing.
+ * A [minMs, maxMs] range restricts the scan to points visible on the
+ * chart. An extreme is only reported when it's a genuine turning point
+ * *within* that visible window — i.e. it has neighbours on both sides
+ * that confirm it as a peak (high) or trough (low). This drops extremes
+ * sitting at the window edges, whose true value may lie off-screen
+ * (e.g. this morning's low before "now", or an afternoon high still
+ * rising past the right edge), while still showing today's high the
+ * moment its peak is on screen. Exported for testing.
  */
 export function computeDailyExtremes(
   data: readonly { timeMs: number; median: number }[],
   range?: [number, number],
 ): DailyExtreme[] {
-  const byDay = new Map<number, DailyExtreme>();
-  for (const p of data) {
+  const minMs = range ? range[0] : -Infinity;
+  const maxMs = range ? range[1] : Infinity;
+  const visible = data.filter((p) => p.timeMs >= minMs && p.timeMs <= maxMs);
+
+  // Per day, track the index (within `visible`) of the highest/lowest point
+  const byDay = new Map<number, { highIdx: number; lowIdx: number }>();
+  for (let i = 0; i < visible.length; i++) {
+    const p = visible[i]!;
     const d = new Date(p.timeMs);
     const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const existing = byDay.get(dayMs);
-    if (!existing) {
-      byDay.set(dayMs, {
-        dayMs,
-        high: { timeMs: p.timeMs, value: p.median },
-        low: { timeMs: p.timeMs, value: p.median },
-      });
+    const e = byDay.get(dayMs);
+    if (!e) {
+      byDay.set(dayMs, { highIdx: i, lowIdx: i });
     } else {
-      if (p.median > existing.high.value) existing.high = { timeMs: p.timeMs, value: p.median };
-      if (p.median < existing.low.value) existing.low = { timeMs: p.timeMs, value: p.median };
+      if (p.median > visible[e.highIdx]!.median) e.highIdx = i;
+      if (p.median < visible[e.lowIdx]!.median) e.lowIdx = i;
     }
   }
-  let days = [...byDay.values()];
-  if (range) {
-    const [minMs, maxMs] = range;
-    days = days.filter((day) => {
-      const start = new Date(day.dayMs);
-      const dayEnd = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1).getTime();
-      return day.dayMs >= minMs && dayEnd <= maxMs;
-    });
+
+  // A turning point needs an in-window neighbour on each side; points at
+  // the window edge can't be confirmed (the curve may continue off-screen)
+  const isPeak = (i: number): boolean =>
+    i > 0 &&
+    i < visible.length - 1 &&
+    visible[i - 1]!.median <= visible[i]!.median &&
+    visible[i + 1]!.median <= visible[i]!.median;
+  const isTrough = (i: number): boolean =>
+    i > 0 &&
+    i < visible.length - 1 &&
+    visible[i - 1]!.median >= visible[i]!.median &&
+    visible[i + 1]!.median >= visible[i]!.median;
+
+  const days: DailyExtreme[] = [];
+  for (const [dayMs, e] of byDay) {
+    const hi = visible[e.highIdx]!;
+    const lo = visible[e.lowIdx]!;
+    const high = isPeak(e.highIdx) ? { timeMs: hi.timeMs, value: hi.median } : undefined;
+    const low = isTrough(e.lowIdx) ? { timeMs: lo.timeMs, value: lo.median } : undefined;
+    if (high || low) days.push({ dayMs, high, low });
   }
   days.sort((a, b) => a.dayMs - b.dayMs);
   return days;
@@ -590,9 +609,9 @@ function drawDailyExtremeLabels(
   };
 
   for (const day of extremes) {
-    drawLabel(day.high.timeMs, day.high.value, true);
-    // A day with a single data point has high === low; one label is enough
-    if (day.low.timeMs !== day.high.timeMs) {
+    if (day.high) drawLabel(day.high.timeMs, day.high.value, true);
+    // Skip the low if it coincides with the high (a lone flat point)
+    if (day.low && day.low.timeMs !== day.high?.timeMs) {
       drawLabel(day.low.timeMs, day.low.value, false);
     }
   }
