@@ -496,19 +496,19 @@ export interface DailyExtreme {
  * Group forecast points into local calendar days and find each day's
  * highest and lowest value (by median). Days are grouped using the
  * browser's local timezone so they line up with the x-axis day labels.
- * An optional [minMs, maxMs] range restricts the scan to points visible
- * on the chart, so every extreme falls on the drawn median line.
+ *
+ * When a [minMs, maxMs] range is given, only days that fall *entirely*
+ * within it are returned. Partial days at either edge are dropped: their
+ * true extreme may lie beyond what's displayed (e.g. an afternoon high
+ * past the right edge), so labelling them would be misleading.
  * Exported for testing.
  */
 export function computeDailyExtremes(
   data: readonly { timeMs: number; median: number }[],
   range?: [number, number],
 ): DailyExtreme[] {
-  const minMs = range ? range[0] : -Infinity;
-  const maxMs = range ? range[1] : Infinity;
   const byDay = new Map<number, DailyExtreme>();
   for (const p of data) {
-    if (p.timeMs < minMs || p.timeMs > maxMs) continue;
     const d = new Date(p.timeMs);
     const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const existing = byDay.get(dayMs);
@@ -523,7 +523,15 @@ export function computeDailyExtremes(
       if (p.median < existing.low.value) existing.low = { timeMs: p.timeMs, value: p.median };
     }
   }
-  const days = [...byDay.values()];
+  let days = [...byDay.values()];
+  if (range) {
+    const [minMs, maxMs] = range;
+    days = days.filter((day) => {
+      const start = new Date(day.dayMs);
+      const dayEnd = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1).getTime();
+      return day.dayMs >= minMs && dayEnd <= maxMs;
+    });
+  }
   days.sort((a, b) => a.dayMs - b.dayMs);
   return days;
 }

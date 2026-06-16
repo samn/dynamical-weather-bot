@@ -265,22 +265,46 @@ describe("computeDailyExtremes", () => {
     ]);
   });
 
-  it("ignores points outside the given visible range", () => {
-    // Pre-dawn low and late high fall outside the window and must not
-    // become the day's extremes (they'd render off the visible line).
+  it("only returns days that fall entirely within the visible range", () => {
     const data = [
-      mk(localDate(2026, 4, 1, 5), 50), // before range → excluded
-      mk(localDate(2026, 4, 1, 9), 62),
-      mk(localDate(2026, 4, 1, 15), 78),
-      mk(localDate(2026, 4, 1, 21), 90), // after range → excluded
+      // Day 1: partial — window starts mid-day, so it's dropped
+      mk(localDate(2026, 4, 1, 9), 50),
+      mk(localDate(2026, 4, 1, 18), 60),
+      // Day 2: fully covered
+      mk(localDate(2026, 4, 2, 3), 40),
+      mk(localDate(2026, 4, 2, 15), 70),
+      // Day 3: partial — window ends mid-day (and the trend is still
+      // rising past the edge), so it's dropped
+      mk(localDate(2026, 4, 3, 6), 45),
+      mk(localDate(2026, 4, 3, 12), 80),
     ];
     const range: [number, number] = [
-      localDate(2026, 4, 1, 8).getTime(),
-      localDate(2026, 4, 1, 16).getTime(),
+      localDate(2026, 4, 1, 9).getTime(),
+      localDate(2026, 4, 3, 12).getTime(),
     ];
-    const [day] = computeDailyExtremes(data, range);
-    expect(day!.low.value).toBe(62);
-    expect(day!.high.value).toBe(78);
+    const res = computeDailyExtremes(data, range);
+    expect(res).toHaveLength(1);
+    expect(res[0]!.dayMs).toBe(localDate(2026, 4, 2).getTime());
+    expect(res[0]!.high.value).toBe(70);
+    expect(res[0]!.low.value).toBe(40);
+  });
+
+  it("includes a day whose midnight boundaries coincide with the range edges", () => {
+    const data = [mk(localDate(2026, 4, 2, 3), 40), mk(localDate(2026, 4, 2, 15), 70)];
+    const range: [number, number] = [
+      localDate(2026, 4, 2).getTime(),
+      localDate(2026, 4, 3).getTime(),
+    ];
+    expect(computeDailyExtremes(data, range)).toHaveLength(1);
+  });
+
+  it("returns every day when no range is given", () => {
+    const data = [
+      mk(localDate(2026, 4, 1, 9), 50),
+      mk(localDate(2026, 4, 2, 9), 60),
+      mk(localDate(2026, 4, 3, 9), 70),
+    ];
+    expect(computeDailyExtremes(data)).toHaveLength(3);
   });
 
   it("treats a single-point day as high === low at the same time", () => {
