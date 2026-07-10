@@ -7,14 +7,25 @@ import { windSpeed, precipToMmHr, cloudCoverToFraction } from "./weather.js";
 const HRRR_STORE_URL =
   "https://dynamical-noaa-hrrr.s3.us-west-2.amazonaws.com/noaa-hrrr-forecast-48-hour/v0.1.0.icechunk/";
 
-/** Cached IcechunkStore instance */
-let storePromise: Promise<IcechunkStore> | null = null;
-
+/**
+ * Open the HRRR store at the current tip of its `main` branch.
+ *
+ * A fresh store is opened on every call rather than cached for the page
+ * lifetime. `IcechunkStore.open` resolves the latest snapshot at open time and
+ * pins the returned session to it, so caching the store would freeze us on
+ * whatever snapshot was current when the tab first loaded. HRRR publishes new
+ * forecasts far more often than the daily GEFS product, so a pinned store would
+ * never surface a newer HRRR init time within a long-lived session — defeating
+ * the "check for a newer forecast" refresh path. Opening fresh guarantees we
+ * always read the latest available HRRR init time and data.
+ *
+ * Within a single forecast fetch the store is still opened only once and reused
+ * across the per-variable chunk reads (via `fetchHrrrMetadata` →
+ * `HrrrMetadata.store`), so the manifest-cache benefit is preserved where it
+ * matters for read throughput.
+ */
 function getStore(): Promise<IcechunkStore> {
-  if (!storePromise) {
-    storePromise = IcechunkStore.open(HRRR_STORE_URL);
-  }
-  return storePromise;
+  return IcechunkStore.open(HRRR_STORE_URL);
 }
 
 /** Maximum number of hourly steps in HRRR 48-hour forecast */

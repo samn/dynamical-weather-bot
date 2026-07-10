@@ -1,5 +1,17 @@
-import { describe, it, expect } from "vitest";
-import { geoToHrrrIndex } from "./hrrr.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("icechunk-js", () => ({
+  IcechunkStore: { open: vi.fn() },
+}));
+vi.mock("zarrita", () => ({
+  open: vi.fn(),
+  get: vi.fn(),
+  slice: vi.fn(),
+}));
+
+import { IcechunkStore } from "icechunk-js";
+import * as zarr from "zarrita";
+import { geoToHrrrIndex, fetchLatestHrrrInitTime } from "./hrrr.js";
 
 /**
  * Approximate HRRR grid coordinate arrays for testing.
@@ -58,5 +70,37 @@ describe("geoToHrrrIndex", () => {
   it("returns null for single-element coordinate arrays", () => {
     const result = geoToHrrrIndex(40, -90, [0], [0]);
     expect(result).toBeNull();
+  });
+});
+
+describe("fetchLatestHrrrInitTime", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("opens a fresh store on each call so newly published forecasts are seen", async () => {
+    // `IcechunkStore.open` pins the read session to the snapshot that is the
+    // tip of `main` at open time. Reusing one cached store would freeze us on
+    // that snapshot, so a newer HRRR forecast published later in the session
+    // would never appear. A fresh open each call is what guarantees freshness.
+    let latestSec = 1_700_000_000;
+    vi.mocked(IcechunkStore.open).mockImplementation(
+      async () => ({ resolve: () => ({}) }) as unknown as IcechunkStore,
+    );
+    vi.mocked(zarr.open).mockResolvedValue({} as never);
+    vi.mocked(zarr.get).mockImplementation(
+      async () => ({ data: new BigInt64Array([BigInt(latestSec)]) }) as never,
+    );
+
+    const first = await fetchLatestHrrrInitTime();
+    expect(first).toBe(new Date(1_700_000_000 * 1000).toISOString());
+
+    // A newer HRRR forecast is published one hour later.
+    latestSec = 1_700_003_600;
+    const second = await fetchLatestHrrrInitTime();
+    expect(second).toBe(new Date(1_700_003_600 * 1000).toISOString());
+
+    // Each call re-opens the store — no stale pinned snapshot.
+    expect(vi.mocked(IcechunkStore.open)).toHaveBeenCalledTimes(2);
   });
 });
