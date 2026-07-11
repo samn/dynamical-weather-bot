@@ -47,6 +47,9 @@ interface ChartOptions {
   overlaySeries?: ChartOverlaySeries[];
   /** Label each day's high/low value on the median line (e.g. temperature) */
   showDailyExtremes?: boolean;
+  /** Timestamps (ms) where rainbow conditions are possible — each gets a
+   *  rainbow icon near the top of the plot (precipitation chart) */
+  rainbowTimes?: number[];
 }
 
 interface ChartState {
@@ -183,6 +186,33 @@ function drawHorizonSunIcon(
   ctx.lineTo(arrowX + size * 0.08, horizonY - size * 0.2 - arrowDir * size * 0.12);
   ctx.closePath();
   ctx.fill();
+}
+
+/** Rainbow stripe colours, outermost (red) to innermost (violet) */
+const RAINBOW_COLORS = ["#e5484d", "#f5a623", "#f5d90a", "#46a758", "#4d9fff", "#8e4ec6"];
+
+/** Draw a rainbow icon (concentric arc stripes) centred on the given point */
+function drawRainbowIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+): void {
+  const outerR = size * 0.48;
+  const innerR = size * 0.2;
+  const stripeW = (outerR - innerR) / RAINBOW_COLORS.length;
+  // Arc centre sits below the icon centre so the arch fills the box
+  const baseY = cy + size * 0.24;
+
+  ctx.save();
+  ctx.lineWidth = stripeW;
+  for (let i = 0; i < RAINBOW_COLORS.length; i++) {
+    ctx.strokeStyle = RAINBOW_COLORS[i]!;
+    ctx.beginPath();
+    ctx.arc(cx, baseY, outerR - stripeW * (i + 0.5), Math.PI, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /** Marker style configuration */
@@ -643,6 +673,7 @@ export function renderChart(opts: ChartOptions): void {
     yClampMax,
     overlaySeries: rawOverlaySeries,
     showDailyExtremes,
+    rainbowTimes,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
@@ -987,6 +1018,21 @@ export function renderChart(opts: ChartOptions): void {
         if (Math.abs(mx - nowX) > iconSize * 2) {
           drawMarkerIcon(ctx, marker.type, mx, padding.top - iconSize * 0.5 - 1, iconSize);
         }
+      }
+    }
+  }
+
+  // Rainbow icons at timesteps where a rainbow is possible
+  if (rainbowTimes && rainbowTimes.length > 0) {
+    const rainbowSize = compact ? 13 : 16;
+    const rainbowY = padding.top + rainbowSize * 0.65;
+    for (const t of rainbowTimes) {
+      const rx = timeToX(t);
+      if (
+        rx - rainbowSize / 2 >= padding.left &&
+        rx + rainbowSize / 2 <= padding.left + chartWidth
+      ) {
+        drawRainbowIcon(ctx, rx, rainbowY, rainbowSize);
       }
     }
   }

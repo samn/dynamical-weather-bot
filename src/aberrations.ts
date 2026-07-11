@@ -1,5 +1,6 @@
 import type { ForecastData, Aberration } from "./types.js";
 import { formatDayPart } from "./format.js";
+import { detectRainbowWindows } from "./rainbow.js";
 import { type UnitSystem, formatTemp, msToMph } from "./units.js";
 
 /** Clamp a value to [0, 1] */
@@ -75,6 +76,18 @@ export function detectAberrations(
         message: `Heavy rain possible ${formatDayPart(peak.time)}: up to ${fmtPrecip(maxPrecipP90)} (90th percentile)`,
       });
     }
+  }
+
+  // Rainbow conditions: sunlit rain with the sun above the horizon but no
+  // higher than 42° (see rainbow.ts for the physics). Only report upcoming
+  // windows — a rainbow that may already have happened isn't actionable.
+  const rainbowWindow = detectRainbowWindows(forecast).find((w) => w.hoursFromNow >= 0);
+  if (rainbowWindow) {
+    aberrations.push({
+      type: "rainbow",
+      icon: "\u{1F308}",
+      message: `Rainbow possible ${formatDayPart(rainbowWindow.startTime)}: rain with sun breaking through low in the sky`,
+    });
   }
 
   // Analyze wind

@@ -41,6 +41,7 @@ import {
   setViewMode,
 } from "./model-selection.js";
 import { detectAberrations } from "./aberrations.js";
+import { detectRainbowWindows } from "./rainbow.js";
 import {
   renderChart,
   renderChartSkeleton,
@@ -143,6 +144,15 @@ let hrrrAvailable = true;
 
 /** Fixed time range [startMs, endMs] computed from all models so x-axis stays stable */
 let cachedTimeRange: [number, number] | undefined;
+
+/** Timestamps (window midpoints) where rainbow conditions are possible,
+ *  shown as icons on the precipitation chart */
+let cachedRainbowTimes: number[] = [];
+
+/** Recompute rainbow marker times from a fully blended forecast */
+function updateRainbowTimes(forecast: ForecastData): void {
+  cachedRainbowTimes = detectRainbowWindows(forecast).map((w) => (w.startMs + w.endMs) / 2);
+}
 
 function updateCachedTimeRange(inputs: Map<ForecastVariable, ModelVariableInput[]>): void {
   const firstVar = inputs.values().next().value;
@@ -337,11 +347,13 @@ function renderVariableChart(
     latitude: cachedLocation?.latitude,
     longitude: cachedLocation?.longitude,
     overlaySeries,
+    rainbowTimes: variable === "precipitation" ? cachedRainbowTimes : undefined,
     ...opts,
   });
 }
 
 function renderCharts(forecast: ForecastData): void {
+  updateRainbowTimes(forecast);
   const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
   for (const v of variables) {
     renderVariableChart(v, forecast[v]);
@@ -359,24 +371,8 @@ function reblendAndRender(): void {
   const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
 
   if (viewMode === "per-model") {
-    // Per-model (unaggregated) view: show each model's quantiles overlaid
-    for (const varKey of variables) {
-      const allInputs = cachedModelInputs.get(varKey);
-      if (!allInputs) continue;
-      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
-      if (filtered.length === 0) continue;
-
-      const overlays: ChartOverlaySeries[] = filtered.map((input) => ({
-        data: input.points,
-        color: MODEL_COLORS[input.model],
-        label: MODEL_SHORT_NAMES[input.model],
-      }));
-
-      // Use the first model's data as the primary (for axes/crosshair)
-      renderVariableChart(varKey, filtered[0]!.points, overlays);
-    }
-
-    // Still compute blended forecast for aberrations
+    // Compute the blended forecast first — it drives aberrations and the
+    // rainbow markers shown on the (overlaid) precipitation chart
     const useMagic = getMagicBlend();
     const grid = loadAccuracyGrid();
     const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
@@ -396,6 +392,25 @@ function reblendAndRender(): void {
       cloudCover: results.cloudCover ?? [],
     };
     lastForecast = forecast;
+    updateRainbowTimes(forecast);
+
+    // Per-model (unaggregated) view: show each model's quantiles overlaid
+    for (const varKey of variables) {
+      const allInputs = cachedModelInputs.get(varKey);
+      if (!allInputs) continue;
+      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
+      if (filtered.length === 0) continue;
+
+      const overlays: ChartOverlaySeries[] = filtered.map((input) => ({
+        data: input.points,
+        color: MODEL_COLORS[input.model],
+        label: MODEL_SHORT_NAMES[input.model],
+      }));
+
+      // Use the first model's data as the primary (for axes/crosshair)
+      renderVariableChart(varKey, filtered[0]!.points, overlays);
+    }
+
     renderAberrations(detectAberrations(forecast, getUnitSystem()));
     return;
   }
@@ -423,6 +438,7 @@ function reblendAndRender(): void {
   };
 
   lastForecast = forecast;
+  updateRainbowTimes(forecast);
   renderAberrations(detectAberrations(forecast, getUnitSystem()));
   // Only re-render charts that have data
   for (const v of variables) {
@@ -697,9 +713,11 @@ async function loadForecast(location: LatLon): Promise<void> {
   updateLocationLabel(location);
   showLocationDisplay();
 
-  // Clear stale aberrations and any in-progress "Updating forecast…"
-  // indicator from a prior load so they can't bleed into the new one.
+  // Clear stale aberrations, rainbow markers, and any in-progress
+  // "Updating forecast…" indicator from a prior load so they can't
+  // bleed into the new one.
   aberrationsEl.innerHTML = "";
+  cachedRainbowTimes = [];
   updatingIndicator.classList.add("hidden");
 
   try {
@@ -870,6 +888,13 @@ async function loadForecast(location: LatLon): Promise<void> {
       cachedModelInputs ?? undefined,
       hrrrAvailable,
     );
+
+    // Rainbow markers need precipitation and cloud cover together, so they
+    // land once all data is in — refresh the precipitation chart with them
+    updateRainbowTimes(forecast);
+    if (cachedRainbowTimes.length > 0) {
+      renderVariableChart("precipitation", forecast.precipitation);
+    }
 
     // Aberrations render after all data is available
     renderAberrations(detectAberrations(forecast, getUnitSystem()));

@@ -250,6 +250,13 @@ button:hover {
   border-left-color: var(--danger);
 }
 
+.aberration-card.rainbow {
+  border-left-color: transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(to bottom, #e5484d, #f5d90a, #46a758, #4d9fff, #8e4ec6) border-box;
+}
+
 .aberration-icon {
   font-size: 1.3rem;
   flex-shrink: 0;

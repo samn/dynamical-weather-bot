@@ -150,6 +150,33 @@ export function computeSunTimes(
 }
 
 /**
+ * Compute the sun's elevation angle above the horizon (degrees) at a given
+ * time and location. Positive values mean the sun is up; negative values
+ * mean it is below the horizon. Uses the geometric (unrefracted) position,
+ * which is accurate to well under a degree — plenty for deciding whether
+ * the sun is low enough in the sky for phenomena like rainbows.
+ */
+export function solarElevation(timeMs: number, latitude: number, longitude: number): number {
+  const date = new Date(timeMs);
+  const t = julianCentury(toJulianDay(date));
+
+  const decl = solarDeclination(t) * DEG_TO_RAD;
+  const eqTime = equationOfTime(t);
+
+  // True solar time in minutes, from UTC time of day + equation of time
+  // + longitude offset (4 minutes per degree, positive east)
+  const dayStart = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const minutesUtc = (timeMs - dayStart) / 60000;
+  const trueSolarMin = (((minutesUtc + eqTime + 4 * longitude) % 1440) + 1440) % 1440;
+  const hourAngle = (trueSolarMin / 4 - 180) * DEG_TO_RAD;
+
+  const lat = latitude * DEG_TO_RAD;
+  const cosZenith =
+    Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(hourAngle);
+  return 90 - Math.acos(Math.max(-1, Math.min(1, cosZenith))) * RAD_TO_DEG;
+}
+
+/**
  * Compute all time markers (midnight, noon, sunrise, sunset) that fall
  * within the given time range.
  */
