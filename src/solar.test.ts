@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeSunTimes, computeTimeMarkers } from "./solar.js";
+import { computeSunTimes, computeTimeMarkers, solarElevation } from "./solar.js";
 
 /** Helper: create a UTC Date */
 function utcDate(
@@ -82,6 +82,48 @@ describe("computeSunTimes", () => {
     const date = utcDate(2026, 12, 21);
     const result = computeSunTimes(date, 69.6496, 18.956);
     expect(result).toBeUndefined();
+  });
+});
+
+describe("solarElevation", () => {
+  const NY_LAT = 40.7128;
+  const NY_LON = -74.006;
+
+  it("is near zero at the computed sunrise time", () => {
+    const sun = computeSunTimes(utcDate(2026, 4, 5), NY_LAT, NY_LON);
+    expect(sun).toBeDefined();
+    // computeSunTimes includes -0.833° refraction, so the geometric
+    // elevation at "sunrise" sits slightly below zero
+    const elevation = solarElevation(sun!.sunrise, NY_LAT, NY_LON);
+    expect(elevation).toBeGreaterThan(-2);
+    expect(elevation).toBeLessThan(0.5);
+  });
+
+  it("peaks near 90 - latitude + declination at solar noon", () => {
+    // London on the June solstice: max elevation ≈ 90 - 51.5 + 23.4 ≈ 62°
+    const noon = utcDate(2026, 6, 21, 12).getTime();
+    const elevation = solarElevation(noon, 51.5074, -0.1278);
+    expect(elevation).toBeGreaterThan(60);
+    expect(elevation).toBeLessThan(64);
+  });
+
+  it("is strongly negative in the middle of the night", () => {
+    // 4:00 UTC = midnight EDT in New York
+    const midnight = utcDate(2026, 4, 5, 4).getTime();
+    expect(solarElevation(midnight, NY_LAT, NY_LON)).toBeLessThan(-20);
+  });
+
+  it("is nearly overhead at the equator on the equinox", () => {
+    const noon = utcDate(2026, 3, 20, 12).getTime();
+    expect(solarElevation(noon, 0, 0)).toBeGreaterThan(85);
+  });
+
+  it("descends through the rainbow-friendly range in the late afternoon", () => {
+    // New York, April 5 2026 (solar noon ≈ 16:56 UTC, elevation ≈ 55°)
+    expect(solarElevation(utcDate(2026, 4, 5, 19).getTime(), NY_LAT, NY_LON)).toBeGreaterThan(42);
+    const late = solarElevation(utcDate(2026, 4, 5, 21).getTime(), NY_LAT, NY_LON);
+    expect(late).toBeGreaterThan(20);
+    expect(late).toBeLessThan(32);
   });
 });
 

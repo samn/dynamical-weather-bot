@@ -86,7 +86,7 @@ export type ForecastVariable = "temperature" | "precipitation" | "windSpeed" | "
 
 /** A weather aberration to highlight to the user */
 export interface Aberration {
-  type: "warm" | "cool" | "rain" | "danger";
+  type: "warm" | "cool" | "rain" | "danger" | "rainbow";
   icon: string;
   message: string;
 }

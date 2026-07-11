@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { detectAberrations } from "./aberrations.js";
 import { formatDayPart } from "./format.js";
+import { solarElevation } from "./solar.js";
 import type { ForecastData, ForecastPoint } from "./types.js";
 
 /** Local-time base so day-part assertions are timezone-independent */
@@ -125,6 +126,60 @@ describe("detectAberrations", () => {
     const rain = result.find((a) => a.type === "rain");
     expect(rain).toBeDefined();
     expect(rain!.message).toContain(`Heavy rain possible ${formatDayPart(pointTime(30))}`);
+  });
+
+  it("flags a possible rainbow when rain coincides with a low, visible sun", () => {
+    const forecast = makeForecast();
+    // Pick a timestep where the sun is up but below the 42° rainbow limit —
+    // computed from the actual timestamps so the test is timezone-independent
+    const idx = forecast.precipitation.findIndex((p) => {
+      const elevation = solarElevation(
+        new Date(p.time).getTime(),
+        forecast.location.latitude,
+        forecast.location.longitude,
+      );
+      return elevation > 3 && elevation < 40;
+    });
+    expect(idx).toBeGreaterThanOrEqual(0);
+    forecast.precipitation[idx] = { ...forecast.precipitation[idx]!, median: 1, p10: 1, p90: 1 };
+    forecast.cloudCover[idx] = { ...forecast.cloudCover[idx]!, median: 0.3 };
+
+    const result = detectAberrations(forecast);
+    const rainbow = result.find((a) => a.type === "rainbow");
+    expect(rainbow).toBeDefined();
+    expect(rainbow!.icon).toBe("\u{1F308}");
+    expect(rainbow!.message).toContain("Rainbow possible");
+  });
+
+  it("does not flag a rainbow when the sky stays overcast", () => {
+    const forecast = makeForecast();
+    const overcast = forecast.cloudCover.map((p) => ({ ...p, median: 0.95 }));
+    const rainy = forecast.precipitation.map((p) => ({ ...p, median: 1, p10: 1, p90: 1 }));
+    const result = detectAberrations({ ...forecast, precipitation: rainy, cloudCover: overcast });
+    expect(result.some((a) => a.type === "rainbow")).toBe(false);
+  });
+
+  it("does not flag rainbow windows that are already in the past", () => {
+    // Rain and broken cloud across the past three days: rainbow conditions
+    // certainly occurred, but every timestep has negative hoursFromNow
+    const pastPoints = Array.from({ length: 24 }, (_, i) =>
+      makePoint({ hoursFromNow: i * 3 - 72 }),
+    );
+    const forecast = makeForecast({
+      temperature: pastPoints,
+      precipitation: pastPoints.map((p) => ({ ...p, median: 1, p10: 1, p90: 1, min: 0, max: 2 })),
+      windSpeed: pastPoints.map((p) => ({ ...p, median: 3, p10: 2, p90: 5, min: 1, max: 6 })),
+      cloudCover: pastPoints.map((p) => ({
+        ...p,
+        median: 0.2,
+        p10: 0.1,
+        p90: 0.3,
+        min: 0,
+        max: 0.4,
+      })),
+    });
+    const result = detectAberrations(forecast);
+    expect(result.some((a) => a.type === "rainbow")).toBe(false);
   });
 
   it("detects persistent precipitation", () => {
