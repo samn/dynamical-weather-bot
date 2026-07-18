@@ -889,15 +889,14 @@ async function loadForecast(location: LatLon): Promise<void> {
       hrrrAvailable,
     );
 
-    // Rainbow markers need precipitation and cloud cover together, so they
-    // land once all data is in — refresh the precipitation chart with them
-    updateRainbowTimes(forecast);
-    if (cachedRainbowTimes.length > 0) {
-      renderVariableChart("precipitation", forecast.precipitation);
-    }
-
-    // Aberrations render after all data is available
-    renderAberrations(detectAberrations(forecast, getUnitSystem()));
+    // Re-render everything now that all data is in: rainbow markers need
+    // precipitation and cloud cover together, the per-variable renders
+    // during progressive loading may have used a provisional common time
+    // range (computed before every model had arrived), and the user may
+    // have toggled models or the view mode mid-load — reblendAndRender
+    // reads the current selection state rather than the snapshot this
+    // load started with.
+    reblendAndRender();
     updateBlendWeightsDisplay();
 
     checkForNewerForecast(location, forecast.initTime, false, loadId);

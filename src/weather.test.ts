@@ -6,6 +6,7 @@ import {
   cloudCoverToFraction,
   latToIndex,
   lonToIndex,
+  findLatestInitIndex,
 } from "./weather.js";
 
 describe("percentile", () => {
@@ -135,5 +136,40 @@ describe("lonToIndex", () => {
   it("maps -122.4 (San Francisco) to correct index", () => {
     // (-122.4 + 180) / 0.25 = 57.6 / 0.25 = 230.4 -> rounds to 230
     expect(lonToIndex(-122.4)).toBe(230);
+  });
+});
+
+describe("findLatestInitIndex", () => {
+  // init times in seconds since epoch, 6 hours apart
+  const HOUR = 3600;
+  const initTimes = [0, 6 * HOUR, 12 * HOUR, 18 * HOUR, 24 * HOUR];
+
+  it("returns the last index when now is after all init times", () => {
+    expect(findLatestInitIndex(initTimes, 48 * HOUR * 1000)).toBe(4);
+  });
+
+  it("returns the index of the latest init time at or before now", () => {
+    expect(findLatestInitIndex(initTimes, 13 * HOUR * 1000)).toBe(2);
+    expect(findLatestInitIndex(initTimes, 17 * HOUR * 1000)).toBe(2);
+    expect(findLatestInitIndex(initTimes, 18 * HOUR * 1000)).toBe(3);
+  });
+
+  it("treats an init time exactly equal to now as selectable", () => {
+    expect(findLatestInitIndex(initTimes, 6 * HOUR * 1000)).toBe(1);
+  });
+
+  it("falls back to the newest init when the clock predates the whole archive", () => {
+    // A clock earlier than every archived init time is a broken clock —
+    // serve the newest forecast (pre-clock-relative behavior), not the oldest.
+    expect(findLatestInitIndex([100, 200, 300], 0)).toBe(2);
+  });
+
+  it("returns -1 for an empty array (matches prior last-index behavior)", () => {
+    expect(findLatestInitIndex([], Date.now())).toBe(-1);
+  });
+
+  it("handles a single-element array", () => {
+    expect(findLatestInitIndex([1000], 0)).toBe(0);
+    expect(findLatestInitIndex([1000], 2_000_000)).toBe(0);
   });
 });

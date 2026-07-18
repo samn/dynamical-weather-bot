@@ -122,19 +122,44 @@ async function fetchForecastVariable(
 }
 
 /**
- * Find the index of the most recent init_time in the forecast store.
- * init_time is stored as int64 seconds since epoch.
+ * Find the index of the most recent init_time at or before `nowMs`.
+ *
+ * In production all stored init times are in the past, so this matches the
+ * last entry. Anchoring the choice to the clock (instead of blindly taking
+ * the last index) lets tests pin "now" to a fixed date and always select
+ * the same archived forecast, since stores keep appending new init times.
+ *
+ * `initTimesSec` is sorted ascending, in seconds since epoch. If every init
+ * time is after `nowMs`, the clock predates the whole archive — treat it as
+ * broken and fall back to the newest init (the pre-clock-relative behavior)
+ * rather than serving the oldest archived forecast.
  */
-async function getLatestInitTimeIndex(
+export function findLatestInitIndex(initTimesSec: number[], nowMs: number): number {
+  const last = initTimesSec.length - 1;
+  if (last < 0) return -1;
+  if ((initTimesSec[0] ?? 0) * 1000 > nowMs) return last;
+  let idx = last;
+  while (idx > 0 && (initTimesSec[idx] ?? 0) * 1000 > nowMs) {
+    idx--;
+  }
+  return idx;
+}
+
+/**
+ * Find the index of the most recent init_time in the forecast store
+ * relative to the current clock. init_time is stored as int64 seconds
+ * since epoch.
+ */
+export async function getLatestInitTimeIndex(
   store: IcechunkStore,
 ): Promise<{ index: number; initTime: Date }> {
   const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
-  const lastIdx = data.length - 1;
+  const idx = findLatestInitIndex(data, Date.now());
   // Seconds since epoch -> milliseconds
-  const secValue = data[lastIdx] ?? 0;
-  return { index: lastIdx, initTime: new Date(secValue * 1000) };
+  const secValue = data[idx] ?? 0;
+  return { index: idx, initTime: new Date(secValue * 1000) };
 }
 
 /**
