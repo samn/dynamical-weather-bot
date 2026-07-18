@@ -9,9 +9,12 @@ export default defineConfig({
   reporter: "list",
   expect: {
     toHaveScreenshot: {
-      // Absorb minor antialiasing/font-rasterization differences between
-      // Linux environments while still catching real visual regressions.
-      maxDiffPixelRatio: 0.02,
+      // Small absolute budget: absorbs minor antialiasing jitter between
+      // Linux environments but fails on real changes (a label, a marker,
+      // an aberration card are all well over 500px). Baselines are
+      // byte-identical on a matching browser build, so if this trips
+      // without a code cause, regenerate baselines and inspect the diff.
+      maxDiffPixels: 500,
       animations: "disabled",
       caret: "hide",
     },

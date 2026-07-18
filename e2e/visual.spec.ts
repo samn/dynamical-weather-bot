@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { proxyExternalRequests, waitForForecastLoad } from "./helpers.js";
+import { blockDataStores, proxyExternalRequests, waitForForecastLoad } from "./helpers.js";
 
 /**
  * Visual regression tests.
@@ -70,10 +70,7 @@ test.describe("visual snapshots", () => {
     }, savedCacheJson!);
     // Block the data stores — the cached forecast must render identically
     // without any network, and background refresh checks fail silently.
-    await page.route("**/data.dynamical.org/**", (route) => route.abort("blockedbyclient"));
-    await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
-      route.abort("blockedbyclient"),
-    );
+    await blockDataStores(page);
     await page.goto(LOCATION_QUERY);
     await waitForForecastLoad(page, 30_000);
   }

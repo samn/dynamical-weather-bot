@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
+  blockDataStores,
   proxyExternalRequests,
   waitForForecastLoad,
   extractCacheEntry,
@@ -29,10 +30,7 @@ test.describe("real forecast integration", () => {
     // Proxy the ZIP API through Node.js (bypasses browser CORS)
     await proxyExternalRequests(page);
     // Block Zarr data stores to prevent background refresh from interfering
-    await page.route("**/data.dynamical.org/**", (route) => route.abort("blockedbyclient"));
-    await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
-      route.abort("blockedbyclient"),
-    );
+    await blockDataStores(page);
     await page.goto("/?zip=10001");
     await waitForForecastLoad(page, 30_000);
   }
@@ -431,10 +429,7 @@ test.describe("real forecast integration", () => {
     // Proxy external requests (ZIP API) through Node.js
     await proxyExternalRequests(page);
     // Block Zarr data stores so cache is used without network validation
-    await page.route("**/data.dynamical.org/**", (route) => route.abort("blockedbyclient"));
-    await page.route("**/*.s3.us-west-2.amazonaws.com/**", (route) =>
-      route.abort("blockedbyclient"),
-    );
+    await blockDataStores(page);
 
     const start = Date.now();
     await page.goto("/?zip=10001");

@@ -2,7 +2,14 @@ import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
 import proj4 from "proj4";
 import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
-import { windSpeed, precipToMmHr, cloudCoverToFraction, findLatestInitIndex } from "./weather.js";
+import {
+  windSpeed,
+  precipToMmHr,
+  cloudCoverToFraction,
+  coordToNumbers,
+  findLatestInitIndex,
+  getLatestInitTimeIndex,
+} from "./weather.js";
 
 const HRRR_STORE_URL =
   "https://dynamical-noaa-hrrr.s3.us-west-2.amazonaws.com/noaa-hrrr-forecast-48-hour/v0.1.0.icechunk/";
@@ -23,12 +30,8 @@ const MAX_STEPS = 48;
 /** Fetch just the latest HRRR forecast init time (lightweight metadata check) */
 export async function fetchLatestHrrrInitTime(): Promise<string> {
   const store = await getStore();
-  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
-  const result = await zarr.get(arr);
-  const data = coordToNumbers(result.data);
-  const idx = findLatestInitIndex(data, Date.now());
-  const sec = data[idx] ?? 0;
-  return new Date(sec * 1000).toISOString();
+  const { initTime } = await getLatestInitTimeIndex(store);
+  return initTime.toISOString();
 }
 
 /**
@@ -73,20 +76,6 @@ export function geoToHrrrIndex(
   }
 
   return { xIdx, yIdx };
-}
-
-/** Read a coordinate array as numbers from the Zarr store */
-function coordToNumbers(data: unknown): number[] {
-  if (data instanceof BigInt64Array) {
-    return Array.from(data, (v) => Number(v));
-  }
-  if (data instanceof Float64Array || data instanceof Float32Array || data instanceof Int32Array) {
-    return Array.from(data);
-  }
-  if (Array.isArray(data)) {
-    return data.map(Number);
-  }
-  return [];
 }
 
 /** Metadata needed to fetch individual HRRR variables */

@@ -158,8 +158,10 @@ describe("findLatestInitIndex", () => {
     expect(findLatestInitIndex(initTimes, 6 * HOUR * 1000)).toBe(1);
   });
 
-  it("falls back to index 0 when all init times are after now", () => {
-    expect(findLatestInitIndex([100, 200, 300], 0)).toBe(0);
+  it("falls back to the newest init when the clock predates the whole archive", () => {
+    // A clock earlier than every archived init time is a broken clock —
+    // serve the newest forecast (pre-clock-relative behavior), not the oldest.
+    expect(findLatestInitIndex([100, 200, 300], 0)).toBe(2);
   });
 
   it("returns -1 for an empty array (matches prior last-index behavior)", () => {

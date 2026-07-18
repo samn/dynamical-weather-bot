@@ -5,7 +5,7 @@ import {
   latToIndex,
   lonToIndex,
   coordToNumbers,
-  findLatestInitIndex,
+  getLatestInitTimeIndex,
   toForecastPoints,
   windSpeed,
   precipToMmHr,
@@ -61,17 +61,6 @@ export async function fetchEcmwfMetadata(location: LatLon): Promise<EcmwfMetadat
   ]);
 
   return { store, initIdx, initTime, leadTimeHours, latIdx, lonIdx, numEnsemble: NUM_ENSEMBLE };
-}
-
-async function getLatestInitTimeIndex(
-  store: IcechunkStore,
-): Promise<{ index: number; initTime: Date }> {
-  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
-  const result = await zarr.get(arr);
-  const data = coordToNumbers(result.data);
-  const idx = findLatestInitIndex(data, Date.now());
-  const secValue = data[idx] ?? 0;
-  return { index: idx, initTime: new Date(secValue * 1000) };
 }
 
 async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
