@@ -2,7 +2,7 @@ import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
 import proj4 from "proj4";
 import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
-import { windSpeed, precipToMmHr, cloudCoverToFraction } from "./weather.js";
+import { windSpeed, precipToMmHr, cloudCoverToFraction, findLatestInitIndex } from "./weather.js";
 
 const HRRR_STORE_URL =
   "https://dynamical-noaa-hrrr.s3.us-west-2.amazonaws.com/noaa-hrrr-forecast-48-hour/v0.1.0.icechunk/";
@@ -26,8 +26,9 @@ export async function fetchLatestHrrrInitTime(): Promise<string> {
   const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
-  const lastSec = data[data.length - 1] ?? 0;
-  return new Date(lastSec * 1000).toISOString();
+  const idx = findLatestInitIndex(data, Date.now());
+  const sec = data[idx] ?? 0;
+  return new Date(sec * 1000).toISOString();
 }
 
 /**
@@ -117,7 +118,7 @@ export async function fetchHrrrMetadata(location: LatLon): Promise<HrrrMetadata 
   if (!idx) return null;
 
   const initTimes = coordToNumbers(initTimeResult.data);
-  const initTimeIdx = initTimes.length - 1;
+  const initTimeIdx = findLatestInitIndex(initTimes, Date.now());
   const initTimeSec = initTimes[initTimeIdx] ?? 0;
   const initTime = new Date(initTimeSec * 1000);
 

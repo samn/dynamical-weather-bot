@@ -5,6 +5,7 @@ import {
   latToIndex,
   lonToIndex,
   coordToNumbers,
+  findLatestInitIndex,
   toForecastPoints,
   windSpeed,
   precipToMmHr,
@@ -33,11 +34,8 @@ const NUM_ENSEMBLE = 51;
 /** Fetch just the latest AIFS forecast init time (lightweight metadata check) */
 export async function fetchLatestAifsInitTime(): Promise<string> {
   const store = await getStore();
-  const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
-  const result = await zarr.get(arr);
-  const data = coordToNumbers(result.data);
-  const lastSec = data[data.length - 1] ?? 0;
-  return new Date(lastSec * 1000).toISOString();
+  const { initTime } = await getLatestInitTimeIndex(store);
+  return initTime.toISOString();
 }
 
 /** Metadata needed to fetch individual AIFS variables */
@@ -71,9 +69,9 @@ async function getLatestInitTimeIndex(
   const arr = await zarr.open(store.resolve("init_time"), { kind: "array" });
   const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
-  const lastIdx = data.length - 1;
-  const secValue = data[lastIdx] ?? 0;
-  return { index: lastIdx, initTime: new Date(secValue * 1000) };
+  const idx = findLatestInitIndex(data, Date.now());
+  const secValue = data[idx] ?? 0;
+  return { index: idx, initTime: new Date(secValue * 1000) };
 }
 
 async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
