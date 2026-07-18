@@ -79,13 +79,16 @@ test.describe("visual snapshots", () => {
     test.setTimeout(240_000);
     await loadFresh(page);
 
+    // Full page first, from the top: element screenshots below auto-scroll
+    // charts into view, and a scrolled page would pin the sticky
+    // #model-controls bar mid-page in the stitched full-page capture.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(page).toHaveScreenshot("forecast-page.png", { fullPage: true });
+
     // Each chart canvas individually — tight, focused diffs
     for (const id of CHART_IDS) {
       await expect(page.locator(`#${id}`)).toHaveScreenshot(`${id}-blended.png`);
     }
-
-    // Full page — catches layout, aberration cards, controls, footer
-    await expect(page).toHaveScreenshot("forecast-page.png", { fullPage: true });
 
     savedCacheJson = await page.evaluate(() => localStorage.getItem("weather-cache"));
     expect(savedCacheJson).toBeTruthy();
