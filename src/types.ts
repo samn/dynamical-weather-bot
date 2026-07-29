@@ -99,7 +99,7 @@ export type GridVariable = "temperature" | "precipitation" | "windSpeed" | "clou
 
 /** A weather aberration to highlight to the user */
 export interface Aberration {
-  type: "warm" | "cool" | "rain" | "danger" | "rainbow" | "humid";
+  type: "warm" | "cool" | "rain" | "danger" | "rainbow" | "humid" | "heat";
   icon: string;
   message: string;
 }

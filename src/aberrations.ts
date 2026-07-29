@@ -3,6 +3,7 @@ import { formatDayPart } from "./format.js";
 import { detectRainbowWindows } from "./rainbow.js";
 import { type UnitSystem, formatTemp, msToMph } from "./units.js";
 import { humidityIndex } from "./humidity.js";
+import { computeHeatSeries, heatIndexRisk, wetBulbRisk, type HeatPoint } from "./heat.js";
 
 /** Clamp a value to [0, 1] */
 function clamp01(v: number): number {
@@ -52,6 +53,13 @@ export function detectAberrations(
       });
     }
   }
+
+  // Heat hazards, listed before the softer alerts because they are the only
+  // safety-critical ones: the NWS heat index (how hot the air feels to a
+  // body) and the wet-bulb temperature (whether sweating can still cool that
+  // body at all). Both need humidity, so both are skipped when the forecast
+  // has no dew point series.
+  aberrations.push(...detectHeatHazards(forecast, units));
 
   // Highlight humidity anomalies from the forecast dew point. Dew point is
   // the best single-number proxy for how muggy the air feels, so we flag
@@ -147,6 +155,80 @@ export function detectAberrations(
   }
 
   return aberrations;
+}
+
+/**
+ * Warnings for extreme heat and dangerous wet-bulb temperatures.
+ *
+ * Each hazard is reported at most once, from its peak in the forecast. When
+ * the ensemble median already crosses a warning band the alert is stated
+ * plainly; when only the 90th-percentile temperature crosses it the alert is
+ * hedged as "possible", matching how the heavy-rain and wind alerts talk
+ * about the upper tail of the ensemble.
+ *
+ * Only upcoming timesteps are considered. The charts also cover recent past
+ * hours, but unlike the descriptive alerts (a temperature swing you can see
+ * on the graph) a heat-safety warning about a peak that has already passed
+ * is not actionable.
+ */
+function detectHeatHazards(forecast: ForecastData, units: UnitSystem): Aberration[] {
+  const heat = computeHeatSeries(forecast.temperature, forecast.dewPoint).filter(
+    (p) => p.hoursFromNow >= 0,
+  );
+  if (heat.length === 0) return [];
+
+  const aberrations: Aberration[] = [];
+  const context = (p: HeatPoint) =>
+    `(air ${formatTemp(p.tempC, units)}, dew point ${formatTemp(p.dewPointC, units)})`;
+
+  // Wet bulb leads: it is the more severe hazard, and it can be dangerous at
+  // air temperatures that look unremarkable on the temperature chart.
+  const wetBulbPeak = maxBy(heat, (p) => p.wetBulbC);
+  const wetBulb = wetBulbRisk(wetBulbPeak.wetBulbC);
+  if (wetBulb.warn) {
+    aberrations.push({
+      type: "heat",
+      icon: wetBulb.icon,
+      message: `${wetBulb.label} ${formatDayPart(wetBulbPeak.time)}: wet bulb ${formatTemp(wetBulbPeak.wetBulbC, units)} ${context(wetBulbPeak)} — ${wetBulb.advice}`,
+    });
+  } else {
+    const peak = maxBy(heat, (p) => p.wetBulbP90C);
+    const risk = wetBulbRisk(peak.wetBulbP90C);
+    if (risk.warn) {
+      aberrations.push({
+        type: "heat",
+        icon: risk.icon,
+        message: `${risk.label} possible ${formatDayPart(peak.time)}: wet bulb up to ${formatTemp(peak.wetBulbP90C, units)} in the warmest ensemble members — ${risk.advice}`,
+      });
+    }
+  }
+
+  const heatIndexPeak = maxBy(heat, (p) => p.heatIndexC);
+  const heatIndex = heatIndexRisk(heatIndexPeak.heatIndexC);
+  if (heatIndex.warn) {
+    aberrations.push({
+      type: "heat",
+      icon: heatIndex.icon,
+      message: `${heatIndex.label} ${formatDayPart(heatIndexPeak.time)}: heat index ${formatTemp(heatIndexPeak.heatIndexC, units)} ${context(heatIndexPeak)} — ${heatIndex.advice}`,
+    });
+  } else {
+    const peak = maxBy(heat, (p) => p.heatIndexP90C);
+    const risk = heatIndexRisk(peak.heatIndexP90C);
+    if (risk.warn) {
+      aberrations.push({
+        type: "heat",
+        icon: risk.icon,
+        message: `${risk.label} possible ${formatDayPart(peak.time)}: heat index up to ${formatTemp(peak.heatIndexP90C, units)} in the warmest ensemble members — ${risk.advice}`,
+      });
+    }
+  }
+
+  return aberrations;
+}
+
+/** The element of a non-empty list with the largest score */
+function maxBy<T>(items: T[], score: (item: T) => number): T {
+  return items.reduce((best, item) => (score(item) > score(best) ? item : best), items[0]!);
 }
 
 function average(values: number[]): number {
