@@ -173,7 +173,11 @@ export function computeFeelsLike(
   });
 }
 
-function indexByHour(points: ForecastPoint[]): Map<number, ForecastPoint> {
+/**
+ * Index a forecast series by rounded hoursFromNow so series sampled at the
+ * same timesteps (temperature, dew point, wind) can be joined.
+ */
+export function indexByHour(points: ForecastPoint[]): Map<number, ForecastPoint> {
   const byHour = new Map<number, ForecastPoint>();
   for (const p of points) byHour.set(Math.round(p.hoursFromNow), p);
   return byHour;

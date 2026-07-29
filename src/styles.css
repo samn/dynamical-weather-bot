@@ -18,6 +18,7 @@
   --rain: #66b3ff;
   --danger: #ef5350;
   --humid: #26c6da;
+  --heat: #ff7043;
   --success: #66bb6a;
   --font: system-ui, -apple-system, sans-serif;
 }
@@ -253,6 +254,11 @@ button:hover {
 
 .aberration-card.humid {
   border-left-color: var(--humid);
+}
+
+/* Heat-safety warnings (extreme heat index, dangerous wet bulb) */
+.aberration-card.heat {
+  border-left-color: var(--heat);
 }
 
 .aberration-card.rainbow {

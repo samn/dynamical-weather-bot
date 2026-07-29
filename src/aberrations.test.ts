@@ -293,6 +293,131 @@ describe("detectAberrations", () => {
     expect(humid!.message).toContain("°F");
   });
 
+  /**
+   * Build a forecast whose temperature and dew point are flat except for a
+   * single hot, muggy timestep, so heat alerts have an unambiguous peak.
+   */
+  function makeHeatForecast(opts: {
+    tempC: number;
+    dewPointC: number;
+    /** 90th-percentile temperature at the peak (defaults to the median) */
+    tempP90C?: number;
+    /** Index of the peak timestep within the 24-step series */
+    peakIndex?: number;
+    /** Offset applied to every hoursFromNow, for testing past peaks */
+    hoursOffset?: number;
+  }): ForecastData {
+    const peakIndex = opts.peakIndex ?? 8;
+    const offset = opts.hoursOffset ?? 0;
+    return makeForecast({
+      temperature: Array.from({ length: 24 }, (_, i) =>
+        makePoint({
+          median: i === peakIndex ? opts.tempC : 20,
+          p90: i === peakIndex ? (opts.tempP90C ?? opts.tempC) : 22,
+          p10: 18,
+          min: 16,
+          max: 40,
+          hoursFromNow: i * 3 + offset,
+        }),
+      ),
+      dewPoint: Array.from({ length: 24 }, (_, i) =>
+        makePoint({
+          median: i === peakIndex ? opts.dewPointC : 10,
+          p10: 8,
+          p90: 12,
+          min: 6,
+          max: 26,
+          hoursFromNow: i * 3 + offset,
+        }),
+      ),
+    });
+  }
+
+  it("warns about extreme heat when the median heat index reaches the danger band", () => {
+    // 38°C air with a 24°C dew point ≈ 108°F heat index (NWS "Danger")
+    const result = detectAberrations(makeHeatForecast({ tempC: 38, dewPointC: 24 }));
+    const heat = result.find((a) => a.type === "heat" && a.message.includes("heat index"));
+    expect(heat).toBeDefined();
+    expect(heat!.message).toContain("Extreme heat");
+    expect(heat!.message).toContain(formatDayPart(pointTime(24)));
+    expect(heat!.message).toContain("air 38.0°C");
+    expect(heat!.message).toContain("dew point 24.0°C");
+  });
+
+  it("escalates to extreme danger at a heat index above 51.7°C", () => {
+    const result = detectAberrations(makeHeatForecast({ tempC: 45, dewPointC: 30 }));
+    const heat = result.find((a) => a.type === "heat" && a.message.includes("heat index"));
+    expect(heat).toBeDefined();
+    expect(heat!.message).toContain("Extreme heat danger");
+  });
+
+  it("hedges extreme heat as possible when only the warmest members reach it", () => {
+    const result = detectAberrations(makeHeatForecast({ tempC: 32, dewPointC: 24, tempP90C: 39 }));
+    const heat = result.find((a) => a.type === "heat" && a.message.includes("heat index"));
+    expect(heat).toBeDefined();
+    expect(heat!.message).toContain("Extreme heat possible");
+    expect(heat!.message).toContain("in the warmest ensemble members");
+  });
+
+  it("warns about dangerous wet-bulb temperatures", () => {
+    // 33°C air with a 28°C dew point gives a wet bulb near 29°C
+    const result = detectAberrations(makeHeatForecast({ tempC: 33, dewPointC: 28 }));
+    const wetBulb = result.find((a) => a.type === "heat" && a.message.includes("wet bulb"));
+    expect(wetBulb).toBeDefined();
+    expect(wetBulb!.message).toContain("Dangerous wet-bulb heat");
+    expect(wetBulb!.message).toContain(formatDayPart(pointTime(24)));
+  });
+
+  it("escalates the wet-bulb warning past the 35°C survivability limit", () => {
+    const result = detectAberrations(makeHeatForecast({ tempC: 42, dewPointC: 38 }));
+    const wetBulb = result.find((a) => a.type === "heat" && a.message.includes("wet bulb"));
+    expect(wetBulb).toBeDefined();
+    expect(wetBulb!.message).toContain("Unsurvivable wet-bulb heat");
+  });
+
+  it("hedges the wet-bulb warning when only the warmest members reach it", () => {
+    const result = detectAberrations(makeHeatForecast({ tempC: 29, dewPointC: 27, tempP90C: 34 }));
+    const wetBulb = result.find((a) => a.type === "heat" && a.message.includes("wet bulb"));
+    expect(wetBulb).toBeDefined();
+    expect(wetBulb!.message).toContain("possible");
+    expect(wetBulb!.message).toContain("in the warmest ensemble members");
+  });
+
+  it("does not warn about heat in a mild forecast", () => {
+    const result = detectAberrations(makeHeatForecast({ tempC: 24, dewPointC: 14 }));
+    expect(result.some((a) => a.type === "heat")).toBe(false);
+  });
+
+  it("does not warn about heat at an ordinary warm summer peak", () => {
+    // 31°C with a 20°C dew point is "extreme caution" on the NWS scale — hot,
+    // but not a reason to interrupt the user
+    const result = detectAberrations(makeHeatForecast({ tempC: 31, dewPointC: 20 }));
+    expect(result.some((a) => a.type === "heat")).toBe(false);
+  });
+
+  it("does not warn about heat without a dew point series", () => {
+    const forecast = makeHeatForecast({ tempC: 40, dewPointC: 28 });
+    const result = detectAberrations({ ...forecast, dewPoint: undefined });
+    expect(result.some((a) => a.type === "heat")).toBe(false);
+  });
+
+  it("does not warn about a heat peak that has already passed", () => {
+    const result = detectAberrations(
+      makeHeatForecast({ tempC: 42, dewPointC: 30, peakIndex: 4, hoursOffset: -72 }),
+    );
+    expect(result.some((a) => a.type === "heat")).toBe(false);
+  });
+
+  it("formats heat warnings in imperial units", () => {
+    const result = detectAberrations(makeHeatForecast({ tempC: 40, dewPointC: 28 }), "imperial");
+    const heat = result.filter((a) => a.type === "heat");
+    expect(heat.length).toBeGreaterThan(0);
+    for (const alert of heat) {
+      expect(alert.message).toContain("°F");
+      expect(alert.message).not.toContain("°C");
+    }
+  });
+
   it("uses imperial units when specified", () => {
     const forecast = makeForecast({
       temperature: Array.from({ length: 24 }, (_, i) =>
