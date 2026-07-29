@@ -933,7 +933,10 @@ async function loadForecast(location: LatLon): Promise<void> {
       const arrived = new Map<ModelId, ModelVariableInput>();
       await Promise.all(
         dpFetches.map(async (mf) => {
-          const points = await mf.fetch;
+          // Dew point is optional and has no chart of its own — a failed
+          // fetch for one model must not abort the whole forecast load, so
+          // swallow the error and simply skip that model's dew point.
+          const points = await mf.fetch.catch(() => null);
           if (loadId !== currentLoadId || !points) return;
           arrived.set(mf.model, { model: mf.model, points, isEnsemble: mf.isEnsemble });
           const inputs = slotOrder.filter((m) => arrived.has(m)).map((m) => arrived.get(m)!);

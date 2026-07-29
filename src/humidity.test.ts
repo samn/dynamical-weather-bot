@@ -69,15 +69,16 @@ describe("heatIndex", () => {
   });
 
   it("applies the low-humidity adjustment for hot, dry air", () => {
-    // 38°C (100.4°F) at 10% RH triggers the r<13 correction
-    const adjusted = heatIndex(38, 10);
-    expect(adjusted).toBeGreaterThan(30);
-    expect(adjusted).toBeLessThan(40);
+    // 38°C (100.4°F) at 10% RH triggers the r<13 correction, which
+    // subtracts ~0.3°C from the ~35.05°C unadjusted regression. The tight
+    // tolerance fails if the adjustment branch is removed.
+    expect(heatIndex(38, 10)).toBeCloseTo(34.73, 1);
   });
 
   it("applies the high-humidity adjustment near 85°F", () => {
-    // 29°C (84.2°F) at 90% RH triggers the r>85 correction
-    expect(heatIndex(29, 90)).toBeGreaterThan(29);
+    // 29°C (84.2°F) at 90% RH triggers the r>85 correction, which adds
+    // ~0.15°C to the ~37.08°C unadjusted regression.
+    expect(heatIndex(29, 90)).toBeCloseTo(37.23, 1);
   });
 });
 
@@ -164,11 +165,13 @@ describe("computeFeelsLike", () => {
     expect(result[0]!.hoursFromNow).toBe(0);
   });
 
-  it("transforms each statistic through feelsLike using aligned dew point and wind", () => {
+  it("maps each temperature quantile through feelsLike at the median dew point and wind", () => {
+    // Holding dew point and wind at their median keeps the transform
+    // monotonic in temperature, so the quantile band stays ordered.
     const result = computeFeelsLike(temperature, dewPoint, windSpeed);
     expect(result[0]!.median).toBeCloseTo(feelsLike(35, 24, 2), 5);
-    expect(result[0]!.p90).toBeCloseTo(feelsLike(37, 26, 3), 5);
-    expect(result[0]!.min).toBeCloseTo(feelsLike(32, 21, 0), 5);
+    expect(result[0]!.p90).toBeCloseTo(feelsLike(37, 24, 2), 5);
+    expect(result[0]!.min).toBeCloseTo(feelsLike(32, 24, 2), 5);
   });
 
   it("aligns by hoursFromNow regardless of array order", () => {
@@ -176,6 +179,20 @@ describe("computeFeelsLike", () => {
     const reversedWind = windSpeed.map((_, i) => windSpeed[windSpeed.length - 1 - i]!);
     const result = computeFeelsLike(temperature, reversedDew, reversedWind);
     expect(result[1]!.median).toBeCloseTo(feelsLike(30, 20, 2), 5);
+  });
+
+  it("keeps min ≤ p10 ≤ median ≤ p90 ≤ max even in cold, gusty conditions", () => {
+    // Wind chill decreases with wind speed, so naively pairing each
+    // temperature quantile with the same-named wind quantile would invert
+    // the band. The transform must keep the quantiles ordered.
+    const cold = [makePoint({ hoursFromNow: 0, min: 0, p10: 1, median: 1.5, p90: 2, max: 3 })];
+    const dew = [makePoint({ hoursFromNow: 0, min: -2, p10: -1, median: 0, p90: 1, max: 2 })];
+    const gusty = [makePoint({ hoursFromNow: 0, min: 1.5, p10: 1.5, median: 8, p90: 20, max: 25 })];
+    const [pt] = computeFeelsLike(cold, dew, gusty);
+    expect(pt!.min).toBeLessThanOrEqual(pt!.p10);
+    expect(pt!.p10).toBeLessThanOrEqual(pt!.median);
+    expect(pt!.median).toBeLessThanOrEqual(pt!.p90);
+    expect(pt!.p90).toBeLessThanOrEqual(pt!.max);
   });
 
   it("falls back to the raw temperature when dew point or wind is missing", () => {

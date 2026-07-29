@@ -750,12 +750,17 @@ export function renderChart(opts: ChartOptions): void {
   const fontSize = compact ? 9 : 11;
   const smallFontSize = compact ? 8 : 10;
 
-  // Compute y-range before padding so we can measure only visible band labels
+  // Compute y-range before padding so we can measure only visible band labels.
+  // The context series (e.g. dew point) draws only a median line, so it
+  // contributes just its median to the range — not its undrawn min/max band,
+  // which would over-expand the axis and compress the primary curve.
   const allRangePoints = [
     ...(convertedOverlays.length > 0
       ? [...data, ...convertedOverlays.flatMap((s) => s.data)]
       : data),
-    ...(contextSeries ? contextSeries.data : []),
+    ...(contextSeries
+      ? contextSeries.data.map((p) => ({ ...p, min: p.median, max: p.median }))
+      : []),
   ];
   const { yMin, yMax } = computeYRange(allRangePoints, intensityBands, yClampMin, yClampMax);
 

@@ -129,11 +129,21 @@ export function humidityIndex(dewPointC: number): HumidityIndex {
 
 /**
  * Build a "feels like" forecast series aligned to the temperature series.
- * Each statistic (median, p10, p90, min, max) is passed through
- * {@link feelsLike} using the dew point and wind speed at the same
- * timestep (matched by rounded hoursFromNow). When a matching dew point or
- * wind value is unavailable, the raw temperature statistic is passed
- * through unchanged so the chart still renders.
+ *
+ * Each temperature quantile (min, p10, median, p90, max) is mapped through
+ * {@link feelsLike} at the *median* dew point and wind speed for that
+ * timestep (matched by rounded hoursFromNow). Holding humidity and wind
+ * fixed keeps the transform monotonic in temperature, so the quantile band
+ * stays ordered — pairing each temperature quantile with the same-named
+ * wind quantile would not, since wind chill decreases with wind speed and
+ * the wind distribution is not rank-correlated with temperature, which can
+ * invert the shaded band (p10 > p90) or push the median outside it. The
+ * mapped values are sorted as a final guard against the small
+ * non-monotonicity at the heat-index/wind-chill thresholds.
+ *
+ * When a matching dew point or wind value is unavailable, the raw
+ * temperature statistic is passed through unchanged so the chart still
+ * renders.
  */
 export function computeFeelsLike(
   temperature: ForecastPoint[],
@@ -148,14 +158,17 @@ export function computeFeelsLike(
     const dp = dewByHour.get(hour);
     const wind = windByHour.get(hour);
     if (!dp || !wind) return { ...t };
+    const apparent = (v: number) => feelsLike(v, dp.median, wind.median);
+    const sorted = [t.min, t.p10, t.median, t.p90, t.max].map(apparent);
+    sorted.sort((a, b) => a - b);
     return {
       time: t.time,
       hoursFromNow: t.hoursFromNow,
-      median: feelsLike(t.median, dp.median, wind.median),
-      p10: feelsLike(t.p10, dp.p10, wind.p10),
-      p90: feelsLike(t.p90, dp.p90, wind.p90),
-      min: feelsLike(t.min, dp.min, wind.min),
-      max: feelsLike(t.max, dp.max, wind.max),
+      min: sorted[0]!,
+      p10: sorted[1]!,
+      median: sorted[2]!,
+      p90: sorted[3]!,
+      max: sorted[4]!,
     };
   });
 }
