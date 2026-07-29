@@ -308,12 +308,18 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
     forecasts[0]!.initTime,
   );
 
-  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+  const variables: ForecastVariable[] = [
+    "temperature",
+    "precipitation",
+    "windSpeed",
+    "cloudCover",
+    "dewPoint",
+  ];
   const result: Partial<Record<ForecastVariable, ForecastPoint[]>> = {};
   for (const varKey of variables) {
     const inputs: ModelVariableInput[] = forecasts.map((f) => ({
       model: f.model,
-      points: f[varKey],
+      points: f[varKey] ?? [],
       isEnsemble: f.isEnsemble,
     }));
     result[varKey] = blendVariable(
@@ -333,6 +339,7 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
     precipitation: result.precipitation!,
     windSpeed: result.windSpeed!,
     cloudCover: result.cloudCover!,
+    dewPoint: result.dewPoint!,
   };
 }
 

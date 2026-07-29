@@ -157,6 +157,25 @@ test.describe("real forecast integration", () => {
       expect(pt.max, "cloud ≤ 1").toBeLessThanOrEqual(1.05);
     }
 
+    // ── Dew point (drives humidity / feels-like) ──
+
+    const dewPoint = forecast.dewPoint as CachedPoint[];
+    expect(dewPoint, "dew point should exist").toBeDefined();
+    expect(dewPoint.length, "dew point point count").toBeGreaterThanOrEqual(20);
+    const temp = forecast.temperature as CachedPoint[];
+    for (let i = 0; i < dewPoint.length; i++) {
+      const dp = dewPoint[i]!;
+      if (dp.median == null) continue;
+      // Dew point is a physical temperature in a sane range
+      expect(dp.median, "dew point in range °C").toBeGreaterThan(-60);
+      expect(dp.median).toBeLessThan(40);
+      // Dew point cannot exceed air temperature (allow small blend/interp slack)
+      const airTemp = temp[i]?.median;
+      if (airTemp != null) {
+        expect(dp.median, `dew point ≤ temperature at ${i}`).toBeLessThanOrEqual(airTemp + 1);
+      }
+    }
+
     // ── Per-model inputs ──
 
     const modelInputs = cached!.modelInputs as Record<string, CachedModelInput[]>;
@@ -415,6 +434,49 @@ test.describe("real forecast integration", () => {
 
     await page.click("#info-toggle");
     await expect(page.locator("#info-panel")).toHaveClass(/hidden/);
+  });
+
+  // ─── Test: Feels-like toggle and dew point overlay ──────────────────
+
+  test("temperature chart supports feels-like mode and a dew point overlay", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.addInitScript(() => {
+      // Start from known defaults so the toggles begin in the "actual" state
+      localStorage.removeItem("temp-mode");
+      localStorage.removeItem("show-dewpoint");
+    });
+    await loadFromCache(page);
+
+    // Controls exist and default to actual temperature
+    await expect(page.locator("#temp-actual-btn")).toHaveClass(/active/);
+    await expect(page.locator("#temp-feels-btn")).not.toHaveClass(/active/);
+    await expect(page.locator("#show-dewpoint")).not.toBeChecked();
+    await expect(page.locator(".chart-header h2").first()).toHaveText(/^Temperature/);
+
+    const actualSum = await getCanvasPixelSum(page, "temp-chart");
+
+    // Switch to "feels like" — title changes and the chart re-renders
+    await page.click("#temp-feels-btn");
+    await expect(page.locator("#temp-feels-btn")).toHaveClass(/active/);
+    await expect(page.locator("#temp-actual-btn")).not.toHaveClass(/active/);
+    await expect(page.locator(".chart-header h2").first()).toHaveText(/^Feels Like/);
+    await expect(async () => {
+      const feelsSum = await getCanvasPixelSum(page, "temp-chart");
+      expect(feelsSum).not.toBe(actualSum);
+    }).toPass({ timeout: 5_000 });
+
+    // Switch back to actual temperature
+    await page.click("#temp-actual-btn");
+    await expect(page.locator(".chart-header h2").first()).toHaveText(/^Temperature/);
+
+    // Enable the dew point overlay — chart re-renders with the extra line
+    const beforeOverlay = await getCanvasPixelSum(page, "temp-chart");
+    await page.locator("#show-dewpoint").check();
+    await expect(page.locator("#show-dewpoint")).toBeChecked();
+    await expect(async () => {
+      const withOverlay = await getCanvasPixelSum(page, "temp-chart");
+      expect(withOverlay).not.toBe(beforeOverlay);
+    }).toPass({ timeout: 5_000 });
   });
 
   // ─── Test 6: Cache-based reload performance ─────────────────────────

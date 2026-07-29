@@ -1,4 +1,11 @@
-import type { LatLon, ForecastData, ForecastVariable, Aberration, AccuracyGrid } from "./types.js";
+import type {
+  LatLon,
+  ForecastData,
+  ForecastVariable,
+  GridVariable,
+  Aberration,
+  AccuracyGrid,
+} from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
 import {
   fetchGefsForecast,
@@ -48,7 +55,9 @@ import {
   stopChartSkeleton,
   type IntensityBand,
   type ChartOverlaySeries,
+  type ChartContextSeries,
 } from "./chart.js";
+import { computeFeelsLike } from "./humidity.js";
 import { getCached, setCache } from "./cache.js";
 import { formatInitTime } from "./format.js";
 import { getLocationFromUrl, setLocationInUrl } from "./url-params.js";
@@ -97,6 +106,29 @@ const blendWeightsInfo = document.getElementById("blend-weights-info") as HTMLPa
 const loadStatusEl = document.getElementById("load-status") as HTMLDivElement;
 const loadStatusModelsEl = document.getElementById("load-status-models") as HTMLSpanElement;
 const chartLegendEl = document.getElementById("chart-legend") as HTMLDivElement;
+const tempActualBtn = document.getElementById("temp-actual-btn") as HTMLSpanElement;
+const tempFeelsBtn = document.getElementById("temp-feels-btn") as HTMLSpanElement;
+const showDewpointCheckbox = document.getElementById("show-dewpoint") as HTMLInputElement;
+
+/** Temperature chart display mode: actual air temperature or "feels like" */
+type TempMode = "actual" | "feels-like";
+const TEMP_MODE_KEY = "temp-mode";
+const SHOW_DEWPOINT_KEY = "show-dewpoint";
+/** Colour of the dew point context line on the temperature chart */
+const DEWPOINT_COLOR = "#4dd0e1";
+
+function getTempMode(): TempMode {
+  return localStorage.getItem(TEMP_MODE_KEY) === "feels-like" ? "feels-like" : "actual";
+}
+function setTempMode(mode: TempMode): void {
+  localStorage.setItem(TEMP_MODE_KEY, mode);
+}
+function getShowDewPoint(): boolean {
+  return localStorage.getItem(SHOW_DEWPOINT_KEY) === "true";
+}
+function setShowDewPoint(show: boolean): void {
+  localStorage.setItem(SHOW_DEWPOINT_KEY, String(show));
+}
 
 /** Load bundled accuracy grid data, or return empty grid if not available */
 function loadAccuracyGrid(): AccuracyGrid {
@@ -263,16 +295,19 @@ const MODEL_SHORT_NAMES: Record<ModelId, string> = {
   "ECMWF AIFS": "AIFS",
 };
 
-/** Canvas ID for each forecast variable */
-const VARIABLE_CANVAS: Record<ForecastVariable, string> = {
+/** Canvas ID for each charted (grid) variable */
+const VARIABLE_CANVAS: Record<GridVariable, string> = {
   temperature: "temp-chart",
   precipitation: "precip-chart",
   windSpeed: "wind-chart",
   cloudCover: "cloud-chart",
 };
 
+/** The grid (charted) variables, in display order */
+const GRID_VARIABLES: GridVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+
 /** Build chart render options (excluding canvas and data) for a variable */
-function chartOptsForVariable(variable: ForecastVariable): {
+function chartOptsForVariable(variable: GridVariable): {
   label: string;
   unit: string;
   color: string;
@@ -324,40 +359,95 @@ function chartOptsForVariable(variable: ForecastVariable): {
   }
 }
 
-/** Render a single variable's chart */
+/** Render a single variable's chart.
+ *
+ * When `tempForecast` is supplied for the temperature chart (blended,
+ * single-series view), the "feels like" toggle and the dew point context
+ * overlay are applied using its dew point and wind series. */
 function renderVariableChart(
-  variable: ForecastVariable,
+  variable: GridVariable,
   data: import("./types.js").ForecastPoint[],
   overlaySeries?: ChartOverlaySeries[],
+  tempForecast?: ForecastData,
 ): void {
   const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
   const opts = chartOptsForVariable(variable);
+
+  let chartData = data;
+  let contextSeries: ChartContextSeries | undefined;
+  let label = opts.label;
+
+  // Temperature chart: apply feels-like transform / dew point overlay when a
+  // forecast with dew point is available and we're not in per-model overlay mode.
+  if (variable === "temperature" && !overlaySeries && tempForecast) {
+    const dewPoint = tempForecast.dewPoint ?? [];
+    const feelsLike = getTempMode() === "feels-like";
+    if (feelsLike && dewPoint.length > 0) {
+      chartData = computeFeelsLike(tempForecast.temperature, dewPoint, tempForecast.windSpeed);
+      label = "Feels Like";
+    }
+    if (getShowDewPoint() && dewPoint.length > 0) {
+      contextSeries = { data: dewPoint, color: DEWPOINT_COLOR, label: "Dew point", dashed: true };
+    }
+  }
 
   // Show the unit in the chart title so it's visible even when compact
   // mode drops units from the y-axis tick labels
   const title = canvas.closest(".chart-container")?.querySelector("h2");
   if (title) {
-    title.textContent = opts.unit ? `${opts.label} (${opts.unit})` : opts.label;
+    title.textContent = opts.unit ? `${label} (${opts.unit})` : label;
   }
 
   renderChart({
     canvas,
-    data,
+    data: chartData,
     timeRange: cachedTimeRange,
     latitude: cachedLocation?.latitude,
     longitude: cachedLocation?.longitude,
     overlaySeries,
+    contextSeries,
     rainbowTimes: variable === "precipitation" ? cachedRainbowTimes : undefined,
     ...opts,
+    label,
   });
 }
 
 function renderCharts(forecast: ForecastData): void {
   updateRainbowTimes(forecast);
-  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
-  for (const v of variables) {
-    renderVariableChart(v, forecast[v]);
+  for (const v of GRID_VARIABLES) {
+    renderVariableChart(v, forecast[v], undefined, forecast);
   }
+}
+
+/** Variables blended when building a full forecast — the grid charts plus
+ *  dew point, which feeds the temperature chart, feels-like, and aberrations. */
+const BLEND_VARIABLES: ForecastVariable[] = [...GRID_VARIABLES, "dewPoint"];
+
+/** Blend the enabled models for every variable into a full ForecastData. */
+function blendForecastData(
+  location: LatLon,
+  initTime: string,
+  enabledModels: Set<import("./types.js").ModelId>,
+  useMagic: boolean,
+  grid: AccuracyGrid,
+): ForecastData {
+  const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
+  for (const varKey of BLEND_VARIABLES) {
+    const allInputs = cachedModelInputs!.get(varKey);
+    if (!allInputs) continue;
+    const filtered = allInputs.filter((i) => enabledModels.has(i.model));
+    if (filtered.length === 0) continue;
+    results[varKey] = blendSingleVariable(varKey, filtered, location, grid, useMagic);
+  }
+  return {
+    location,
+    initTime,
+    temperature: results.temperature ?? [],
+    precipitation: results.precipitation ?? [],
+    windSpeed: results.windSpeed ?? [],
+    cloudCover: results.cloudCover ?? [],
+    dewPoint: results.dewPoint ?? [],
+  };
 }
 
 /** Filter cached inputs by enabled models and reblend.
@@ -368,34 +458,18 @@ function reblendAndRender(): void {
 
   const enabledModels = getEnabledModels();
   const viewMode = getViewMode();
-  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
+  const useMagic = getMagicBlend();
+  const grid = loadAccuracyGrid();
+
+  // The blended forecast drives aberrations, rainbow markers, and (in
+  // per-model view too) the dew point / feels-like series on the temp chart.
+  const forecast = blendForecastData(cachedLocation, cachedInitTime, enabledModels, useMagic, grid);
+  lastForecast = forecast;
+  updateRainbowTimes(forecast);
 
   if (viewMode === "per-model") {
-    // Compute the blended forecast first — it drives aberrations and the
-    // rainbow markers shown on the (overlaid) precipitation chart
-    const useMagic = getMagicBlend();
-    const grid = loadAccuracyGrid();
-    const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
-    for (const varKey of variables) {
-      const allInputs = cachedModelInputs.get(varKey);
-      if (!allInputs) continue;
-      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
-      if (filtered.length === 0) continue;
-      results[varKey] = blendSingleVariable(varKey, filtered, cachedLocation, grid, useMagic);
-    }
-    const forecast: ForecastData = {
-      location: cachedLocation,
-      initTime: cachedInitTime,
-      temperature: results.temperature ?? [],
-      precipitation: results.precipitation ?? [],
-      windSpeed: results.windSpeed ?? [],
-      cloudCover: results.cloudCover ?? [],
-    };
-    lastForecast = forecast;
-    updateRainbowTimes(forecast);
-
     // Per-model (unaggregated) view: show each model's quantiles overlaid
-    for (const varKey of variables) {
+    for (const varKey of GRID_VARIABLES) {
       const allInputs = cachedModelInputs.get(varKey);
       if (!allInputs) continue;
       const filtered = allInputs.filter((i) => enabledModels.has(i.model));
@@ -415,35 +489,12 @@ function reblendAndRender(): void {
     return;
   }
 
-  // Blended (aggregated) view: existing behavior
-  const useMagic = getMagicBlend();
-  const grid = loadAccuracyGrid();
-  const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
-
-  for (const varKey of variables) {
-    const allInputs = cachedModelInputs.get(varKey);
-    if (!allInputs) continue;
-    const filtered = allInputs.filter((i) => enabledModels.has(i.model));
-    if (filtered.length === 0) continue;
-    results[varKey] = blendSingleVariable(varKey, filtered, cachedLocation, grid, useMagic);
-  }
-
-  const forecast: ForecastData = {
-    location: cachedLocation,
-    initTime: cachedInitTime,
-    temperature: results.temperature ?? [],
-    precipitation: results.precipitation ?? [],
-    windSpeed: results.windSpeed ?? [],
-    cloudCover: results.cloudCover ?? [],
-  };
-
-  lastForecast = forecast;
-  updateRainbowTimes(forecast);
+  // Blended (aggregated) view
   renderAberrations(detectAberrations(forecast, getUnitSystem()));
   // Only re-render charts that have data
-  for (const v of variables) {
+  for (const v of GRID_VARIABLES) {
     if (forecast[v].length > 0) {
-      renderVariableChart(v, forecast[v]);
+      renderVariableChart(v, forecast[v], undefined, forecast);
     }
   }
 }
@@ -555,17 +606,11 @@ async function checkForNewerForecast(
     const modelForecasts = [gefsForecast, ecmwfForecast, aifsForecast];
     if (hrrrForecast) modelForecasts.push(hrrrForecast);
 
-    const variables: ForecastVariable[] = [
-      "temperature",
-      "precipitation",
-      "windSpeed",
-      "cloudCover",
-    ];
     const newCache = new Map<ForecastVariable, ModelVariableInput[]>();
-    for (const varKey of variables) {
+    for (const varKey of BLEND_VARIABLES) {
       const inputs: ModelVariableInput[] = modelForecasts.map((f) => ({
         model: f.model,
-        points: f[varKey],
+        points: f[varKey] ?? [],
         isEnsemble: f.isEnsemble,
       }));
       newCache.set(varKey, inputs);
@@ -665,8 +710,7 @@ function showSkeletonCharts(): void {
   initTimeLabel.textContent = "";
   initLoadProgress(["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]);
 
-  const variables: ForecastVariable[] = ["temperature", "precipitation", "windSpeed", "cloudCover"];
-  for (const v of variables) {
+  for (const v of GRID_VARIABLES) {
     const canvas = document.getElementById(VARIABLE_CANVAS[v]) as HTMLCanvasElement;
     renderChartSkeleton(canvas);
   }
@@ -799,15 +843,9 @@ async function loadForecast(location: LatLon): Promise<void> {
     const grid = loadAccuracyGrid();
     const enabledModels = getEnabledModels();
     const useMagic = getMagicBlend();
-    const variables: ForecastVariable[] = [
-      "temperature",
-      "precipitation",
-      "windSpeed",
-      "cloudCover",
-    ];
     const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
 
-    const variablePromises = variables.map(async (variable) => {
+    const variablePromises = GRID_VARIABLES.map(async (variable) => {
       const modelFetches: Array<{
         model: ModelId;
         isEnsemble: boolean;
@@ -866,7 +904,51 @@ async function loadForecast(location: LatLon): Promise<void> {
       );
     });
 
-    await Promise.all(variablePromises);
+    // Dew point loads alongside the grid variables but has no chart of its
+    // own — it feeds the temperature chart's feels-like/overlay and the
+    // humidity aberration. Fetch it per model and blend without touching the
+    // progress chips or rendering a chart.
+    const dewPointPromise = (async () => {
+      const dpFetches: Array<{
+        model: ModelId;
+        isEnsemble: boolean;
+        fetch: Promise<import("./types.js").ForecastPoint[] | null>;
+      }> = [
+        { model: "NOAA GEFS", isEnsemble: true, fetch: fetchGefsVariable(gefsMeta, "dewPoint") },
+        {
+          model: "ECMWF IFS ENS",
+          isEnsemble: true,
+          fetch: fetchEcmwfVariable(ecmwfMeta, "dewPoint"),
+        },
+        { model: "ECMWF AIFS", isEnsemble: true, fetch: fetchAifsVariable(aifsMeta, "dewPoint") },
+      ];
+      if (hrrrMeta) {
+        dpFetches.push({
+          model: "NOAA HRRR",
+          isEnsemble: false,
+          fetch: fetchHrrrVariable(hrrrMeta, "dewPoint"),
+        });
+      }
+      const slotOrder: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS", "NOAA HRRR"];
+      const arrived = new Map<ModelId, ModelVariableInput>();
+      await Promise.all(
+        dpFetches.map(async (mf) => {
+          // Dew point is optional and has no chart of its own — a failed
+          // fetch for one model must not abort the whole forecast load, so
+          // swallow the error and simply skip that model's dew point.
+          const points = await mf.fetch.catch(() => null);
+          if (loadId !== currentLoadId || !points) return;
+          arrived.set(mf.model, { model: mf.model, points, isEnsemble: mf.isEnsemble });
+          const inputs = slotOrder.filter((m) => arrived.has(m)).map((m) => arrived.get(m)!);
+          cachedModelInputs!.set("dewPoint", inputs);
+          const filtered = inputs.filter((i) => enabledModels.has(i.model));
+          const toBlend = filtered.length > 0 ? filtered : inputs;
+          results.dewPoint = blendSingleVariable("dewPoint", toBlend, location, grid, useMagic);
+        }),
+      );
+    })();
+
+    await Promise.all([...variablePromises, dewPointPromise]);
     if (loadId !== currentLoadId) return;
     hideLoadProgress();
 
@@ -878,6 +960,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       precipitation: results.precipitation!,
       windSpeed: results.windSpeed!,
       cloudCover: results.cloudCover!,
+      dewPoint: results.dewPoint ?? [],
     };
 
     lastForecast = forecast;
@@ -1024,6 +1107,51 @@ syncUnitToggle();
 syncModelControls();
 metricBtn.addEventListener("click", toggleUnits);
 imperialBtn.addEventListener("click", toggleUnits);
+
+// Temperature chart controls: actual/feels-like toggle + dew point overlay
+function syncTempControls(): void {
+  const feels = getTempMode() === "feels-like";
+  tempActualBtn.classList.toggle("active", !feels);
+  tempFeelsBtn.classList.toggle("active", feels);
+  showDewpointCheckbox.checked = getShowDewPoint();
+}
+
+/** Re-render just the temperature chart to reflect the current toggles. */
+function rerenderTemperature(): void {
+  if (!lastForecast || forecastEl.classList.contains("hidden")) return;
+  if (getViewMode() === "per-model") {
+    // Feels-like / dew point overlays don't apply to the per-model view;
+    // reblend so the chart stays consistent with the current state.
+    reblendAndRender();
+  } else {
+    renderVariableChart("temperature", lastForecast.temperature, undefined, lastForecast);
+  }
+}
+
+function setTempModeAndRender(mode: TempMode): void {
+  setTempMode(mode);
+  syncTempControls();
+  rerenderTemperature();
+}
+
+syncTempControls();
+tempActualBtn.addEventListener("click", () => setTempModeAndRender("actual"));
+tempFeelsBtn.addEventListener("click", () => setTempModeAndRender("feels-like"));
+for (const [btn, mode] of [
+  [tempActualBtn, "actual"],
+  [tempFeelsBtn, "feels-like"],
+] as const) {
+  btn.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setTempModeAndRender(mode);
+    }
+  });
+}
+showDewpointCheckbox.addEventListener("change", () => {
+  setShowDewPoint(showDewpointCheckbox.checked);
+  rerenderTemperature();
+});
 
 // Info panel toggle
 infoToggle.addEventListener("click", (e) => {

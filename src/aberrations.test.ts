@@ -245,6 +245,54 @@ describe("detectAberrations", () => {
     expect(result.some((a) => a.type === "cool" && a.message.includes("Increasing"))).toBe(true);
   });
 
+  it("flags oppressive humidity from a high dew point with timing of the peak", () => {
+    const forecast = makeForecast({
+      dewPoint: Array.from({ length: 24 }, (_, i) =>
+        makePoint({
+          median: i === 8 ? 23 : 12,
+          p10: 10,
+          p90: 24,
+          min: 9,
+          max: 25,
+          hoursFromNow: i * 3,
+        }),
+      ),
+    });
+    const result = detectAberrations(forecast);
+    const humid = result.find((a) => a.type === "humid");
+    expect(humid).toBeDefined();
+    expect(humid!.message).toContain("Oppressive");
+    expect(humid!.message).toContain(formatDayPart(pointTime(24)));
+    expect(humid!.message).toContain("23.0°C");
+  });
+
+  it("does not flag humidity when the dew point stays comfortable", () => {
+    const forecast = makeForecast({
+      dewPoint: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 11, p10: 9, p90: 13, min: 8, max: 14, hoursFromNow: i * 3 }),
+      ),
+    });
+    const result = detectAberrations(forecast);
+    expect(result.some((a) => a.type === "humid")).toBe(false);
+  });
+
+  it("does not flag humidity when no dew point data is present", () => {
+    const result = detectAberrations(makeForecast());
+    expect(result.some((a) => a.type === "humid")).toBe(false);
+  });
+
+  it("formats the dew point in imperial for humidity alerts", () => {
+    const forecast = makeForecast({
+      dewPoint: Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 25, p10: 23, p90: 26, min: 22, max: 27, hoursFromNow: i * 3 }),
+      ),
+    });
+    const result = detectAberrations(forecast, "imperial");
+    const humid = result.find((a) => a.type === "humid");
+    expect(humid).toBeDefined();
+    expect(humid!.message).toContain("°F");
+  });
+
   it("uses imperial units when specified", () => {
     const forecast = makeForecast({
       temperature: Array.from({ length: 24 }, (_, i) =>

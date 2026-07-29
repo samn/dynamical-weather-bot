@@ -155,6 +155,19 @@ export async function fetchAifsVariable(
     return toForecastPoints(speedData, leadTimeHours, initTime);
   }
 
+  if (variable === "dewPoint") {
+    const data = await fetchForecastVariable(
+      store,
+      "dew_point_temperature_2m",
+      initIdx,
+      latIdx,
+      lonIdx,
+      numEnsemble,
+      steps,
+    );
+    return toForecastPoints(data, leadTimeHours, initTime);
+  }
+
   // cloudCover
   const data = await fetchForecastVariable(
     store,
@@ -175,11 +188,12 @@ export async function fetchAifsVariable(
 /** Fetch the full 72-hour probabilistic ECMWF AIFS ENS forecast for a location */
 export async function fetchAifsForecast(location: LatLon): Promise<ModelForecast> {
   const meta = await fetchAifsMetadata(location);
-  const [temperature, precipitation, ws, cloudCover] = await Promise.all([
+  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
     fetchAifsVariable(meta, "temperature"),
     fetchAifsVariable(meta, "precipitation"),
     fetchAifsVariable(meta, "windSpeed"),
     fetchAifsVariable(meta, "cloudCover"),
+    fetchAifsVariable(meta, "dewPoint"),
   ]);
   return {
     model: "ECMWF AIFS",
@@ -190,5 +204,6 @@ export async function fetchAifsForecast(location: LatLon): Promise<ModelForecast
     precipitation,
     windSpeed: ws,
     cloudCover,
+    dewPoint,
   };
 }
