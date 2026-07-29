@@ -182,6 +182,11 @@ export async function fetchHrrrVariable(
     return toPoints(speeds, leadTimeHours, initTime);
   }
 
+  if (variable === "dewPoint") {
+    const data = await fetchHrrrVar(meta, "dew_point_temperature_2m");
+    return toPoints(data, leadTimeHours, initTime);
+  }
+
   // cloudCover
   const data = await fetchHrrrVar(meta, "total_cloud_cover_atmosphere");
   return toPoints(data.map(cloudCoverToFraction), leadTimeHours, initTime);
@@ -195,11 +200,12 @@ export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast
   const meta = await fetchHrrrMetadata(location);
   if (!meta) return null;
 
-  const [temperature, precipitation, ws, cloudCover] = await Promise.all([
+  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
     fetchHrrrVariable(meta, "temperature"),
     fetchHrrrVariable(meta, "precipitation"),
     fetchHrrrVariable(meta, "windSpeed"),
     fetchHrrrVariable(meta, "cloudCover"),
+    fetchHrrrVariable(meta, "dewPoint"),
   ]);
 
   return {
@@ -211,5 +217,6 @@ export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast
     precipitation,
     windSpeed: ws,
     cloudCover,
+    dewPoint,
   };
 }

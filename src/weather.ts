@@ -2,6 +2,7 @@ import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
 import type { LatLon, ForecastPoint, ForecastVariable, ModelForecast } from "./types.js";
 import { normalizeLongitude } from "./geo.js";
+import { dewPointFromRelativeHumidity } from "./humidity.js";
 
 const FORECAST_STORE_URL =
   "https://dynamical-noaa-gefs.s3.us-west-2.amazonaws.com/noaa-gefs-forecast-35-day/v0.2.0.icechunk/";
@@ -290,6 +291,27 @@ export async function fetchGefsVariable(
     return toForecastPoints(speedData, leadTimeHours, initTime);
   }
 
+  if (variable === "dewPoint") {
+    // GEFS reports relative humidity, not dew point — derive dew point per
+    // ensemble member from temperature and relative humidity.
+    const [tempData, rhData] = await Promise.all([
+      fetchForecastVariable(store, "temperature_2m", initIdx, latIdx, lonIdx, numEnsemble, steps),
+      fetchForecastVariable(
+        store,
+        "relative_humidity_2m",
+        initIdx,
+        latIdx,
+        lonIdx,
+        numEnsemble,
+        steps,
+      ),
+    ]);
+    const dewData = tempData.map((tRow, e) =>
+      tRow.map((t, i) => dewPointFromRelativeHumidity(t, rhData[e]![i]!)),
+    );
+    return toForecastPoints(dewData, leadTimeHours, initTime);
+  }
+
   // cloudCover
   const data = await fetchForecastVariable(
     store,
@@ -310,11 +332,12 @@ export async function fetchGefsVariable(
 /** Fetch the full 72-hour probabilistic GEFS forecast for a location */
 export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast> {
   const meta = await fetchGefsMetadata(location);
-  const [temperature, precipitation, ws, cloudCover] = await Promise.all([
+  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
     fetchGefsVariable(meta, "temperature"),
     fetchGefsVariable(meta, "precipitation"),
     fetchGefsVariable(meta, "windSpeed"),
     fetchGefsVariable(meta, "cloudCover"),
+    fetchGefsVariable(meta, "dewPoint"),
   ]);
   return {
     model: "NOAA GEFS",
@@ -325,5 +348,6 @@ export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast
     precipitation,
     windSpeed: ws,
     cloudCover,
+    dewPoint,
   };
 }

@@ -35,6 +35,8 @@ export interface ForecastData {
   windSpeed: ForecastPoint[];
   /** Cloud cover fraction 0-1 */
   cloudCover: ForecastPoint[];
+  /** Dew point in degrees C (optional — used for humidity/feels-like) */
+  dewPoint?: ForecastPoint[];
 }
 
 /** Supported forecast model identifiers */
@@ -51,6 +53,8 @@ export interface ModelForecast {
   precipitation: ForecastPoint[];
   windSpeed: ForecastPoint[];
   cloudCover: ForecastPoint[];
+  /** Dew point in degrees C (optional — used for humidity/feels-like) */
+  dewPoint?: ForecastPoint[];
 }
 
 /** Accuracy grid built from verification statistics */
@@ -81,12 +85,21 @@ export interface AccuracyCell {
   nearbyStations?: NearbyStation[];
 }
 
-/** The four forecast variable keys */
-export type ForecastVariable = "temperature" | "precipitation" | "windSpeed" | "cloudCover";
+/** The forecast variable keys */
+export type ForecastVariable =
+  | "temperature"
+  | "precipitation"
+  | "windSpeed"
+  | "cloudCover"
+  | "dewPoint";
+
+/** Forecast variables that have their own chart in the grid (excludes
+ *  dew point, which is surfaced via the temperature chart) */
+export type GridVariable = "temperature" | "precipitation" | "windSpeed" | "cloudCover";
 
 /** A weather aberration to highlight to the user */
 export interface Aberration {
-  type: "warm" | "cool" | "rain" | "danger" | "rainbow";
+  type: "warm" | "cool" | "rain" | "danger" | "rainbow" | "humid";
   icon: string;
   message: string;
 }

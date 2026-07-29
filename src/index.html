@@ -126,6 +126,20 @@
           <div class="chart-container">
             <div class="chart-header">
               <h2>Temperature</h2>
+              <div class="temp-controls">
+                <span id="temp-mode-toggle" class="mini-toggle">
+                  <span id="temp-actual-btn" class="mini-btn active" role="button" tabindex="0"
+                    >Temp</span
+                  >
+                  <span id="temp-feels-btn" class="mini-btn" role="button" tabindex="0"
+                    >Feels like</span
+                  >
+                </span>
+                <label id="dewpoint-toggle" class="mini-check">
+                  <input type="checkbox" id="show-dewpoint" />
+                  <span>Dew point</span>
+                </label>
+              </div>
             </div>
             <canvas id="temp-chart"></canvas>
           </div>

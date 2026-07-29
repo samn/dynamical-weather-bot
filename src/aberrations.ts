@@ -2,6 +2,7 @@ import type { ForecastData, Aberration } from "./types.js";
 import { formatDayPart } from "./format.js";
 import { detectRainbowWindows } from "./rainbow.js";
 import { type UnitSystem, formatTemp, msToMph } from "./units.js";
+import { humidityIndex } from "./humidity.js";
 
 /** Clamp a value to [0, 1] */
 function clamp01(v: number): number {
@@ -48,6 +49,23 @@ export function detectAberrations(
         type: "danger",
         icon: "\u{1F321}\u{FE0F}",
         message: `Large temperature swing expected: ${formatTemp(firstTemp, units)} (${firstWhen}) to ${formatTemp(secondTemp, units)} (${secondWhen})`,
+      });
+    }
+  }
+
+  // Highlight humidity anomalies from the forecast dew point. Dew point is
+  // the best single-number proxy for how muggy the air feels, so we flag
+  // when it peaks into an oppressive/miserable comfort band.
+  if (forecast.dewPoint && forecast.dewPoint.length > 0) {
+    const dewMedians = forecast.dewPoint.map((p) => p.median);
+    const maxDew = Math.max(...dewMedians);
+    const index = humidityIndex(maxDew);
+    if (index.level === "oppressive" || index.level === "miserable") {
+      const peak = forecast.dewPoint.find((p) => p.median === maxDew)!;
+      aberrations.push({
+        type: "humid",
+        icon: index.icon,
+        message: `${index.label} humidity ${formatDayPart(peak.time)}: dew point up to ${formatTemp(maxDew, units)}`,
       });
     }
   }

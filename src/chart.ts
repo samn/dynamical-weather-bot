@@ -20,6 +20,17 @@ export interface ChartOverlaySeries {
   label: string;
 }
 
+/** An extra median-only line drawn on top of the primary series for context
+ *  (e.g. dew point on the temperature chart). It contributes to the y-range
+ *  and the hover tooltip but is drawn without uncertainty bands. */
+export interface ChartContextSeries {
+  data: ForecastPoint[];
+  color: string;
+  label: string;
+  /** Draw the line dashed to distinguish it from the primary series */
+  dashed?: boolean;
+}
+
 interface ChartOptions {
   canvas: HTMLCanvasElement;
   data: ForecastPoint[];
@@ -50,6 +61,9 @@ interface ChartOptions {
   /** Timestamps (ms) where rainbow conditions are possible — each gets a
    *  rainbow icon near the top of the plot (precipitation chart) */
   rainbowTimes?: number[];
+  /** An extra context line drawn on top of the primary series (e.g. dew
+   *  point on the temperature chart) */
+  contextSeries?: ChartContextSeries;
 }
 
 interface ChartState {
@@ -74,6 +88,7 @@ interface ChartState {
   /** Saved image of the fully rendered chart (before any tooltip overlay) */
   baseImage: ImageData;
   overlaySeries?: Array<{ data: ConvertedPoint[]; color: string; label: string }>;
+  contextSeries?: { data: ConvertedPoint[]; color: string; label: string; dashed?: boolean };
 }
 
 interface ConvertedPoint extends ForecastPoint {
@@ -674,10 +689,11 @@ export function renderChart(opts: ChartOptions): void {
     overlaySeries: rawOverlaySeries,
     showDailyExtremes,
     rainbowTimes,
+    contextSeries: rawContextSeries,
   } = opts;
 
   const conv = convertValue ?? ((v: number) => v);
-  const data: ConvertedPoint[] = rawData.map((p) => ({
+  const convertPoint = (p: ForecastPoint): ConvertedPoint => ({
     ...p,
     timeMs: new Date(p.time).getTime(),
     median: conv(p.median),
@@ -685,7 +701,17 @@ export function renderChart(opts: ChartOptions): void {
     p90: conv(p.p90),
     min: conv(p.min),
     max: conv(p.max),
-  }));
+  });
+  const data: ConvertedPoint[] = rawData.map(convertPoint);
+
+  const contextSeries = rawContextSeries
+    ? {
+        data: rawContextSeries.data.map(convertPoint),
+        color: rawContextSeries.color,
+        label: rawContextSeries.label,
+        dashed: rawContextSeries.dashed,
+      }
+    : undefined;
 
   const convertedOverlays: Array<{ data: ConvertedPoint[]; color: string; label: string }> = [];
   if (rawOverlaySeries) {
@@ -725,8 +751,12 @@ export function renderChart(opts: ChartOptions): void {
   const smallFontSize = compact ? 8 : 10;
 
   // Compute y-range before padding so we can measure only visible band labels
-  const allRangePoints =
-    convertedOverlays.length > 0 ? [...data, ...convertedOverlays.flatMap((s) => s.data)] : data;
+  const allRangePoints = [
+    ...(convertedOverlays.length > 0
+      ? [...data, ...convertedOverlays.flatMap((s) => s.data)]
+      : data),
+    ...(contextSeries ? contextSeries.data : []),
+  ];
   const { yMin, yMax } = computeYRange(allRangePoints, intensityBands, yClampMin, yClampMax);
 
   // Dynamically compute left padding from visible band labels
@@ -868,6 +898,23 @@ export function renderChart(opts: ChartOptions): void {
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+  }
+
+  // Draw the context line (e.g. dew point) as a thin median-only line on top
+  if (contextSeries && contextSeries.data.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = contextSeries.color;
+    ctx.lineWidth = 1.5;
+    if (contextSeries.dashed) ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    for (let i = 0; i < contextSeries.data.length; i++) {
+      const x = timeToX(contextSeries.data[i]!.timeMs);
+      const y = yScale(contextSeries.data[i]!.median);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   ctx.restore(); // remove data clip
@@ -1074,6 +1121,7 @@ export function renderChart(opts: ChartOptions): void {
     xMaxMs,
     baseImage,
     overlaySeries: convertedOverlays.length > 0 ? convertedOverlays : undefined,
+    contextSeries,
   });
 
   registeredCharts.add(canvas);
@@ -1306,6 +1354,26 @@ function drawTooltip(canvas: HTMLCanvasElement, pointerX: number): void {
       if (band) {
         lines.push(band.label);
       }
+    }
+
+    // Context line value (e.g. dew point) at the same moment
+    if (state.contextSeries && state.contextSeries.data.length > 0) {
+      const cs = state.contextSeries;
+      let cIdx = 0;
+      let cBest = Infinity;
+      for (let i = 0; i < cs.data.length; i++) {
+        const dist = Math.abs(cs.data[i]!.timeMs - pointerMs);
+        if (dist < cBest) {
+          cBest = dist;
+          cIdx = i;
+        }
+      }
+      const cp = cs.data[cIdx]!;
+      ctx.fillStyle = cs.color;
+      ctx.beginPath();
+      ctx.arc(timeToX(cp.timeMs), yScale(cp.median), 3, 0, Math.PI * 2);
+      ctx.fill();
+      lines.push(`${cs.label}: ${formatValue(cp.median)}${unitSuffix}`);
     }
   }
 

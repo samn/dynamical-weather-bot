@@ -115,4 +115,16 @@ test.describe("visual snapshots", () => {
     await expect(page.locator("#temp-chart")).toHaveScreenshot("temp-chart-per-model.png");
     await expect(page.locator("#precip-chart")).toHaveScreenshot("precip-chart-per-model.png");
   });
+
+  test("feels-like temperature with dew point overlay matches baseline", async ({ page }) => {
+    test.setTimeout(120_000);
+    await loadFromCache(page);
+
+    await page.click("#temp-feels-btn");
+    await page.locator("#show-dewpoint").check();
+    await expect(page.locator("#temp-feels-btn")).toHaveClass(/active/);
+    await expect(page.locator("#show-dewpoint")).toBeChecked();
+
+    await expect(page.locator("#temp-chart")).toHaveScreenshot("temp-chart-feels-dewpoint.png");
+  });
 });

@@ -17,6 +17,7 @@
   --cool: #4fc3f7;
   --rain: #66b3ff;
   --danger: #ef5350;
+  --humid: #26c6da;
   --success: #66bb6a;
   --font: system-ui, -apple-system, sans-serif;
 }
@@ -248,6 +249,10 @@ button:hover {
 
 .aberration-card.danger {
   border-left-color: var(--danger);
+}
+
+.aberration-card.humid {
+  border-left-color: var(--humid);
 }
 
 .aberration-card.rainbow {
@@ -513,6 +518,53 @@ button:hover {
   font-size: 0.95rem;
   font-weight: 500;
   color: var(--text-muted);
+}
+
+/* Temperature chart controls (feels-like toggle + dew point overlay) */
+.temp-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.72rem;
+}
+
+.mini-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.mini-btn {
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s;
+}
+
+.mini-btn:hover {
+  color: var(--text);
+}
+
+.mini-btn.active {
+  color: var(--text);
+  background: var(--border);
+}
+
+.mini-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mini-check input {
+  accent-color: var(--humid);
+  cursor: pointer;
 }
 
 .chart-legend {
