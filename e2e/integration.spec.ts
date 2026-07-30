@@ -469,6 +469,16 @@ test.describe("real forecast integration", () => {
     await page.click("#temp-actual-btn");
     await expect(page.locator(".chart-header h2").first()).toHaveText(/^Temperature/);
 
+    // Either button flips the mode, like the blend and view toggles: clicking
+    // the already-active button switches to the other mode.
+    await page.click("#temp-actual-btn");
+    await expect(page.locator("#temp-feels-btn")).toHaveClass(/active/);
+    await expect(page.locator("#temp-actual-btn")).not.toHaveClass(/active/);
+    await expect(page.locator(".chart-header h2").first()).toHaveText(/^Feels Like/);
+    await page.click("#temp-feels-btn");
+    await expect(page.locator("#temp-actual-btn")).toHaveClass(/active/);
+    await expect(page.locator(".chart-header h2").first()).toHaveText(/^Temperature/);
+
     // Enable the dew point overlay — chart re-renders with the extra line
     const beforeOverlay = await getCanvasPixelSum(page, "temp-chart");
     await page.locator("#show-dewpoint").check();

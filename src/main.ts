@@ -1128,23 +1128,21 @@ function rerenderTemperature(): void {
   }
 }
 
-function setTempModeAndRender(mode: TempMode): void {
-  setTempMode(mode);
+// Temp mode toggle — either button flips between actual / feels-like,
+// matching the blend and view toggles.
+function toggleTempMode(): void {
+  setTempMode(getTempMode() === "feels-like" ? "actual" : "feels-like");
   syncTempControls();
   rerenderTemperature();
 }
 
 syncTempControls();
-tempActualBtn.addEventListener("click", () => setTempModeAndRender("actual"));
-tempFeelsBtn.addEventListener("click", () => setTempModeAndRender("feels-like"));
-for (const [btn, mode] of [
-  [tempActualBtn, "actual"],
-  [tempFeelsBtn, "feels-like"],
-] as const) {
+for (const btn of [tempActualBtn, tempFeelsBtn]) {
+  btn.addEventListener("click", toggleTempMode);
   btn.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      setTempModeAndRender(mode);
+      toggleTempMode();
     }
   });
 }
