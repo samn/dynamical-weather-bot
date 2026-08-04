@@ -141,6 +141,43 @@ describe("detectAberrations", () => {
       });
       expect(detectAberrations(forecast).some((a) => a.message.includes("swing"))).toBe(false);
     });
+
+    it("still sees rain that ended just before the window when judging rainbows", () => {
+      // A rainbow qualifies on the *previous* timestep's rain too, so the
+      // window's first timestep must still be able to look back past the
+      // window's left edge — otherwise the alert disappears while the
+      // rainbow icon (detected from the full forecast) stays on the chart.
+      const forecast = makeForecast({
+        temperature: Array.from({ length: 24 }, (_, i) => makePoint({ hoursFromNow: i * 3 })),
+      });
+      const idx = forecast.precipitation.findIndex((p, i) => {
+        if (i < 1) return false;
+        const elevation = solarElevation(
+          new Date(p.time).getTime(),
+          forecast.location.latitude,
+          forecast.location.longitude,
+        );
+        return elevation > 3 && elevation < 40;
+      });
+      expect(idx).toBeGreaterThan(0);
+
+      // Rain in the timestep before the window opens, dry (but sunlit) in it
+      forecast.precipitation[idx - 1] = {
+        ...forecast.precipitation[idx - 1]!,
+        median: 1,
+        p10: 1,
+        p90: 1,
+      };
+      forecast.cloudCover[idx - 1] = { ...forecast.cloudCover[idx - 1]!, median: 0.95 };
+      forecast.cloudCover[idx] = { ...forecast.cloudCover[idx]!, median: 0.3 };
+
+      const windowStart = new Date(forecast.precipitation[idx]!.time).getTime();
+      const result = detectAberrations(forecast, "metric", [
+        windowStart,
+        BASE_TIME.getTime() + 72 * 3600_000,
+      ]);
+      expect(result.some((a) => a.type === "rainbow")).toBe(true);
+    });
   });
 
   it("detects large temperature swings in chronological order (cold first)", () => {

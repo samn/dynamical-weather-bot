@@ -23,31 +23,35 @@ const CLOUD_CHANGE_THRESHOLD = 0.3;
 const FORECAST_HORIZON_HOURS = 72;
 
 /**
- * Narrow every series of a forecast to the timesteps an alert may talk
- * about: from now until the end of the forecast on screen.
+ * The window of time an alert may talk about: from now until the end of the
+ * forecast on screen, as `[startMs, endMs]`.
  *
  * Both bounds matter. Models are initialized hours before the page loads and
  * blending unions their timesteps, so a blended series can start well before
  * "now" — a model initialized last night carries last night's weather. It can
  * also run past the right edge of the charts, since the charts stop at the
- * earliest end shared by all enabled models (`computeCommonTimeRange`). Either
- * way the user is being told about weather they cannot see.
+ * earliest end shared by every model fetched (`computeCommonTimeRange`) —
+ * HRRR only runs 48 hours out, so it pins the window short. Either
+ * way the alert would be about weather the user can no longer act on or
+ * cannot see.
  *
  * Timestamps are compared against the wall clock rather than each point's
  * `hoursFromNow`, which is frozen at fetch time and goes stale for cached
  * forecasts and long-lived tabs.
  */
+function displayedWindow(displayRange: [number, number] | undefined): [number, number] {
+  const now = Date.now();
+  return [
+    Math.max(now, displayRange?.[0] ?? -Infinity),
+    Math.min(displayRange?.[1] ?? Infinity, now + FORECAST_HORIZON_HOURS * 60 * 60 * 1000),
+  ];
+}
+
+/** Narrow every series of a forecast to the timesteps in `[start, end]` */
 function withinDisplayedForecast(
   forecast: ForecastData,
-  displayRange: [number, number] | undefined,
+  [start, end]: [number, number],
 ): ForecastData {
-  const now = Date.now();
-  const start = Math.max(now, displayRange?.[0] ?? -Infinity);
-  const end = Math.min(
-    displayRange?.[1] ?? Infinity,
-    now + FORECAST_HORIZON_HOURS * 60 * 60 * 1000,
-  );
-
   const inWindow = (points: ForecastPoint[]): ForecastPoint[] =>
     points.filter((p) => {
       const t = new Date(p.time).getTime();
@@ -79,7 +83,8 @@ export function detectAberrations(
   units: UnitSystem = "metric",
   displayRange?: [number, number],
 ): Aberration[] {
-  const forecast = withinDisplayedForecast(fullForecast, displayRange);
+  const window = displayedWindow(displayRange);
+  const forecast = withinDisplayedForecast(fullForecast, window);
   const aberrations: Aberration[] = [];
 
   // Check for extreme temperature swings within the forecast (using median,
@@ -158,12 +163,26 @@ export function detectAberrations(
 
   // Rainbow conditions: sunlit rain with the sun above the horizon but no
   // higher than 42° (see rainbow.ts for the physics).
-  const rainbowWindow = detectRainbowWindows(forecast)[0];
+  //
+  // Scanned over the full series, not the narrowed one: a timestep qualifies
+  // partly on the *previous* timestep's rain ("droplets linger"), so clipping
+  // the series at the window start would blind the first timestep to rain
+  // that just ended and silently drop the alert — while the rainbow icons on
+  // the precipitation chart, which are detected from the full forecast, still
+  // showed it. Windows are instead kept when they overlap the window, which
+  // also catches one already under way.
+  const [windowStart, windowEnd] = window;
+  const rainbowWindow = detectRainbowWindows(fullForecast).find(
+    (w) => w.endMs >= windowStart && w.startMs <= windowEnd,
+  );
   if (rainbowWindow) {
+    // A window that is already under way opened before the alert window did,
+    // and every timestep in it qualifies, so name one that hasn't passed
+    const when = Math.max(rainbowWindow.startMs, windowStart);
     aberrations.push({
       type: "rainbow",
       icon: "\u{1F308}",
-      message: `Rainbow possible ${formatDayPart(rainbowWindow.startTime)}: rain with sun breaking through low in the sky`,
+      message: `Rainbow possible ${formatDayPart(new Date(when))}: rain with sun breaking through low in the sky`,
     });
   }
 
