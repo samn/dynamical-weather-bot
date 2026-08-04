@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { detectAberrations } from "./aberrations.js";
 import { formatDayPart } from "./format.js";
 import { solarElevation } from "./solar.js";
 import type { ForecastData, ForecastPoint } from "./types.js";
 
-/** Local-time base so day-part assertions are timezone-independent */
+/** Local-time base so day-part assertions are timezone-independent. Alerts
+ *  are confined to the upcoming forecast, so the clock is pinned here too and
+ *  `hoursFromNow` in these fixtures is genuinely hours from "now". */
 const BASE_TIME = new Date(2026, 2, 4, 0, 0, 0);
 
 /** ISO timestamp for a given number of hours after the local base time */
@@ -46,6 +48,15 @@ function makeForecast(overrides: Partial<ForecastData> = {}): ForecastData {
 }
 
 describe("detectAberrations", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("handles empty forecast arrays without crashing", () => {
     const forecast = makeForecast({
       temperature: [],
@@ -59,6 +70,77 @@ describe("detectAberrations", () => {
   it("returns empty array when forecast is mild and steady", () => {
     const result = detectAberrations(makeForecast());
     expect(result).toEqual([]);
+  });
+
+  describe("displayed forecast window", () => {
+    /** A forecast whose only notable weather is an oppressive dew point at
+     *  one timestep, placed `hours` from now */
+    function makeSpikeForecast(hours: number): ForecastData {
+      const comfortable = Array.from({ length: 24 }, (_, i) =>
+        makePoint({ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: i * 3 }),
+      );
+      const spike = makePoint({
+        median: 25,
+        p10: 23,
+        p90: 26,
+        min: 22,
+        max: 27,
+        hoursFromNow: hours,
+      });
+      return makeForecast({
+        dewPoint: [
+          ...comfortable.filter((p) => p.hoursFromNow < hours),
+          spike,
+          ...comfortable.filter((p) => p.hoursFromNow > hours),
+        ],
+      });
+    }
+
+    it("ignores timesteps before now, which blended models carry from earlier init times", () => {
+      // A model initialized last night contributes a muggy evening that has
+      // already happened — off the left of the charts, and over with.
+      const result = detectAberrations(makeSpikeForecast(-28));
+      expect(result.some((a) => a.type === "humid")).toBe(false);
+    });
+
+    it("ignores timesteps past the end of the displayed range", () => {
+      const forecast = makeSpikeForecast(60);
+      // Charts stop at +36h (the earliest end shared by the enabled models)
+      const displayed = detectAberrations(forecast, "metric", [
+        BASE_TIME.getTime(),
+        BASE_TIME.getTime() + 36 * 3600_000,
+      ]);
+      expect(displayed.some((a) => a.type === "humid")).toBe(false);
+
+      // Same forecast charted all the way out: now it is on screen
+      const full = detectAberrations(forecast, "metric", [
+        BASE_TIME.getTime(),
+        BASE_TIME.getTime() + 72 * 3600_000,
+      ]);
+      expect(full.some((a) => a.type === "humid")).toBe(true);
+    });
+
+    it("never looks past 72 hours out when no displayed range is given", () => {
+      expect(detectAberrations(makeSpikeForecast(90)).some((a) => a.type === "humid")).toBe(false);
+      expect(detectAberrations(makeSpikeForecast(60)).some((a) => a.type === "humid")).toBe(true);
+    });
+
+    it("measures temperature swings only across the displayed window", () => {
+      // Bitterly cold before the window opens, mild throughout it
+      const forecast = makeForecast({
+        temperature: Array.from({ length: 32 }, (_, i) =>
+          makePoint({
+            median: i < 8 ? -5 : 20,
+            p10: i < 8 ? -7 : 18,
+            p90: i < 8 ? -3 : 22,
+            min: -8,
+            max: 24,
+            hoursFromNow: (i - 8) * 3,
+          }),
+        ),
+      });
+      expect(detectAberrations(forecast).some((a) => a.message.includes("swing"))).toBe(false);
+    });
   });
 
   it("detects large temperature swings in chronological order (cold first)", () => {

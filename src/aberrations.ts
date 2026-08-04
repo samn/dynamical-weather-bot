@@ -1,4 +1,4 @@
-import type { ForecastData, Aberration } from "./types.js";
+import type { ForecastData, ForecastPoint, Aberration } from "./types.js";
 import { formatDayPart } from "./format.js";
 import { detectRainbowWindows } from "./rainbow.js";
 import { type UnitSystem, formatTemp, msToMph } from "./units.js";
@@ -19,15 +19,67 @@ const WIND_HIGH_THRESHOLD = 10;
 /** Threshold for significant cloud cover change within forecast (fraction 0-1) */
 const CLOUD_CHANGE_THRESHOLD = 0.3;
 
+/** Length of the forecast horizon the app promises, in hours */
+const FORECAST_HORIZON_HOURS = 72;
+
+/**
+ * Narrow every series of a forecast to the timesteps an alert may talk
+ * about: from now until the end of the forecast on screen.
+ *
+ * Both bounds matter. Models are initialized hours before the page loads and
+ * blending unions their timesteps, so a blended series can start well before
+ * "now" — a model initialized last night carries last night's weather. It can
+ * also run past the right edge of the charts, since the charts stop at the
+ * earliest end shared by all enabled models (`computeCommonTimeRange`). Either
+ * way the user is being told about weather they cannot see.
+ *
+ * Timestamps are compared against the wall clock rather than each point's
+ * `hoursFromNow`, which is frozen at fetch time and goes stale for cached
+ * forecasts and long-lived tabs.
+ */
+function withinDisplayedForecast(
+  forecast: ForecastData,
+  displayRange: [number, number] | undefined,
+): ForecastData {
+  const now = Date.now();
+  const start = Math.max(now, displayRange?.[0] ?? -Infinity);
+  const end = Math.min(
+    displayRange?.[1] ?? Infinity,
+    now + FORECAST_HORIZON_HOURS * 60 * 60 * 1000,
+  );
+
+  const inWindow = (points: ForecastPoint[]): ForecastPoint[] =>
+    points.filter((p) => {
+      const t = new Date(p.time).getTime();
+      return t >= start && t <= end;
+    });
+
+  return {
+    ...forecast,
+    temperature: inWindow(forecast.temperature),
+    precipitation: inWindow(forecast.precipitation),
+    windSpeed: inWindow(forecast.windSpeed),
+    cloudCover: inWindow(forecast.cloudCover),
+    dewPoint: forecast.dewPoint ? inWindow(forecast.dewPoint) : undefined,
+  };
+}
+
 /**
  * Detect notable weather aberrations based solely on the forecast data shown
  * on the charts. All aberrations reference values visible on the graphs so
  * users can see what the alert is describing.
+ *
+ * `displayRange` is the `[startMs, endMs]` window the charts are drawn over.
+ * Alerts are confined to the upcoming part of it — never about weather that
+ * has already happened, and never about timesteps past the right edge of the
+ * charts.
  */
 export function detectAberrations(
-  forecast: ForecastData,
+  fullForecast: ForecastData,
   units: UnitSystem = "metric",
+  displayRange?: [number, number],
 ): Aberration[] {
+  const forecast = withinDisplayedForecast(fullForecast, displayRange);
   const aberrations: Aberration[] = [];
 
   // Check for extreme temperature swings within the forecast (using median,
@@ -105,9 +157,8 @@ export function detectAberrations(
   }
 
   // Rainbow conditions: sunlit rain with the sun above the horizon but no
-  // higher than 42° (see rainbow.ts for the physics). Only report upcoming
-  // windows — a rainbow that may already have happened isn't actionable.
-  const rainbowWindow = detectRainbowWindows(forecast).find((w) => w.hoursFromNow >= 0);
+  // higher than 42° (see rainbow.ts for the physics).
+  const rainbowWindow = detectRainbowWindows(forecast)[0];
   if (rainbowWindow) {
     aberrations.push({
       type: "rainbow",
@@ -166,15 +217,11 @@ export function detectAberrations(
  * hedged as "possible", matching how the heavy-rain and wind alerts talk
  * about the upper tail of the ensemble.
  *
- * Only upcoming timesteps are considered. The charts also cover recent past
- * hours, but unlike the descriptive alerts (a temperature swing you can see
- * on the graph) a heat-safety warning about a peak that has already passed
- * is not actionable.
+ * Takes a forecast already narrowed to the displayed window, so the peaks it
+ * reports are upcoming and on screen.
  */
 function detectHeatHazards(forecast: ForecastData, units: UnitSystem): Aberration[] {
-  const heat = computeHeatSeries(forecast.temperature, forecast.dewPoint).filter(
-    (p) => p.hoursFromNow >= 0,
-  );
+  const heat = computeHeatSeries(forecast.temperature, forecast.dewPoint);
   if (heat.length === 0) return [];
 
   const aberrations: Aberration[] = [];

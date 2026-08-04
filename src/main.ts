@@ -485,12 +485,12 @@ function reblendAndRender(): void {
       renderVariableChart(varKey, filtered[0]!.points, overlays);
     }
 
-    renderAberrations(detectAberrations(forecast, getUnitSystem()));
+    renderAberrations(detectAberrations(forecast, getUnitSystem(), cachedTimeRange));
     return;
   }
 
   // Blended (aggregated) view
-  renderAberrations(detectAberrations(forecast, getUnitSystem()));
+  renderAberrations(detectAberrations(forecast, getUnitSystem(), cachedTimeRange));
   // Only re-render charts that have data
   for (const v of GRID_VARIABLES) {
     if (forecast[v].length > 0) {
@@ -757,11 +757,12 @@ async function loadForecast(location: LatLon): Promise<void> {
   updateLocationLabel(location);
   showLocationDisplay();
 
-  // Clear stale aberrations, rainbow markers, and any in-progress
-  // "Updating forecast…" indicator from a prior load so they can't
-  // bleed into the new one.
+  // Clear stale aberrations, rainbow markers, the previous location's
+  // chart time range, and any in-progress "Updating forecast…" indicator
+  // from a prior load so they can't bleed into the new one.
   aberrationsEl.innerHTML = "";
   cachedRainbowTimes = [];
+  cachedTimeRange = undefined;
   updatingIndicator.classList.add("hidden");
 
   try {
@@ -794,7 +795,7 @@ async function loadForecast(location: LatLon): Promise<void> {
       }
 
       initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
-      renderAberrations(detectAberrations(cached.forecast, getUnitSystem()));
+      renderAberrations(detectAberrations(cached.forecast, getUnitSystem(), cachedTimeRange));
       showForecast();
       modelControlsEl.classList.remove("hidden");
       syncModelControls();
@@ -1093,7 +1094,7 @@ function switchUnits(system: UnitSystem): void {
   setUnitSystem(system);
   syncUnitToggle();
   if (lastForecast && !forecastEl.classList.contains("hidden")) {
-    renderAberrations(detectAberrations(lastForecast, system));
+    renderAberrations(detectAberrations(lastForecast, system, cachedTimeRange));
     renderCharts(lastForecast);
   }
 }
