@@ -59,6 +59,7 @@ import {
 } from "./chart.js";
 import { computeFeelsLike } from "./humidity.js";
 import { getCached, setCache } from "./cache.js";
+import { readStorage, writeStorage } from "./storage.js";
 import { formatInitTime } from "./format.js";
 import { getLocationFromUrl, setLocationInUrl } from "./url-params.js";
 import {
@@ -118,16 +119,16 @@ const SHOW_DEWPOINT_KEY = "show-dewpoint";
 const DEWPOINT_COLOR = "#4dd0e1";
 
 function getTempMode(): TempMode {
-  return localStorage.getItem(TEMP_MODE_KEY) === "feels-like" ? "feels-like" : "actual";
+  return readStorage(TEMP_MODE_KEY) === "feels-like" ? "feels-like" : "actual";
 }
 function setTempMode(mode: TempMode): void {
-  localStorage.setItem(TEMP_MODE_KEY, mode);
+  writeStorage(TEMP_MODE_KEY, mode);
 }
 function getShowDewPoint(): boolean {
-  return localStorage.getItem(SHOW_DEWPOINT_KEY) === "true";
+  return readStorage(SHOW_DEWPOINT_KEY) === "true";
 }
 function setShowDewPoint(show: boolean): void {
-  localStorage.setItem(SHOW_DEWPOINT_KEY, String(show));
+  writeStorage(SHOW_DEWPOINT_KEY, String(show));
 }
 
 /** Load bundled accuracy grid data, or return empty grid if not available */

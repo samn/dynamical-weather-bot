@@ -1,14 +1,16 @@
+import { readStorage, writeStorage } from "./storage.js";
+
 export type UnitSystem = "metric" | "imperial";
 
 const STORAGE_KEY = "unit-system";
 
 export function getUnitSystem(): UnitSystem {
-  const stored = localStorage.getItem(STORAGE_KEY);
+  const stored = readStorage(STORAGE_KEY);
   return stored === "metric" ? "metric" : "imperial";
 }
 
 export function setUnitSystem(system: UnitSystem): void {
-  localStorage.setItem(STORAGE_KEY, system);
+  writeStorage(STORAGE_KEY, system);
 }
 
 export function celsiusToFahrenheit(c: number): number {

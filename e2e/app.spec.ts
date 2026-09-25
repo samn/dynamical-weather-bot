@@ -122,6 +122,29 @@ test.describe("page load and initial state", () => {
 
   });
 
+  test("still starts when the browser blocks site data", async ({ page }) => {
+    // Browsers with site data blocked throw on any localStorage access;
+    // preferences are read at startup, so this used to kill the whole app
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "localStorage", {
+        get() {
+          throw new DOMException("The operation is insecure.", "SecurityError");
+        },
+      });
+    });
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(err.message));
+    await page.goto("/");
+
+    // The app's event handlers are wired up: a valid ZIP auto-submits and
+    // the app moves on from the location prompt
+    await page.fill("#zip-input", "10001");
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
+    expect(errors).toEqual([]);
+  });
+
   test("loading, error, and forecast sections are hidden initially", async ({ page }) => {
     await blockZarrRequests(page);
     await page.goto("/");
