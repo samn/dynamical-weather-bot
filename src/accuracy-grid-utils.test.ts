@@ -74,8 +74,8 @@ describe("leadTimeToHourBin", () => {
     // 36 hours — equidistant from 24 and 48, but within tolerance of both
     // Actually 36 is 12 away from both, > 6 tolerance
     expect(leadTimeToHourBin(36 * 3.6e12)).toBeUndefined();
-    // 100 hours
-    expect(leadTimeToHourBin(100 * 3.6e12)).toBeUndefined();
+    // 110 hours — past the last bin (96)
+    expect(leadTimeToHourBin(110 * 3.6e12)).toBeUndefined();
   });
 
   it("handles seconds input", () => {

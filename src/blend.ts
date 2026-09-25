@@ -7,7 +7,7 @@ import type {
   ForecastVariable,
   LatLon,
 } from "./types.js";
-import { FORECAST_HORIZON_HOURS } from "./types.js";
+import { FORECAST_HORIZON_HOURS, LEAD_BINS, LEAD_BIN_WIDTH_HOURS } from "./types.js";
 import { haversineKm } from "./geo.js";
 
 /** Max distance (km) for per-station IDW at runtime */
@@ -22,12 +22,6 @@ const MIN_STATION_DISTANCE_KM = 1;
  * Prevents overfitting to noisy error estimates at stations with limited data.
  */
 const REGULARIZATION_STRENGTH = 0.15;
-
-/**
- * Standard lead time bins available in the accuracy grid (hours).
- * Used for interpolation between bins.
- */
-const LEAD_BINS = [0, 24, 48, 72];
 
 /**
  * Look up accuracy metrics for a location from the grid.
@@ -144,8 +138,12 @@ function blendStationMetrics(
 }
 
 /**
- * Interpolate an error metric between the two nearest lead time bins.
- * Falls back to the nearest available bin if only one side is available.
+ * Interpolate an error metric at a lead time from the lead time bins.
+ *
+ * Each bin's value is an average over its whole day of leads, so it is
+ * placed at the bin's midpoint (bin 0 at 12h) and interpolated linearly
+ * between midpoints; leads before the first or past the last available
+ * midpoint take that bin's value.
  */
 function interpolateError(
   hours: number,
@@ -155,27 +153,19 @@ function interpolateError(
   const varData = modelAccuracy?.[variable];
   if (!varData) return undefined;
 
-  // Find the two surrounding bins
-  let lower: number | undefined;
-  let upper: number | undefined;
-  for (const b of LEAD_BINS) {
-    if (b <= hours) lower = b;
-    if (b >= hours && upper === undefined) upper = b;
+  let lower: { mid: number; value: number } | undefined;
+  for (const bin of LEAD_BINS) {
+    const value = varData[String(bin)];
+    if (value === undefined) continue;
+    const mid = bin + LEAD_BIN_WIDTH_HOURS / 2;
+    if (mid >= hours) {
+      if (!lower) return value;
+      const t = (hours - lower.mid) / (mid - lower.mid);
+      return lower.value + t * (value - lower.value);
+    }
+    lower = { mid, value };
   }
-
-  if (lower === undefined && upper === undefined) return undefined;
-
-  const lowerVal = lower !== undefined ? varData[String(lower)] : undefined;
-  const upperVal = upper !== undefined ? varData[String(upper)] : undefined;
-
-  if (lowerVal === undefined && upperVal === undefined) return undefined;
-  if (lowerVal === undefined) return upperVal;
-  if (upperVal === undefined) return lowerVal;
-  if (lower === upper) return lowerVal;
-
-  // Linear interpolation
-  const t = (hours - lower!) / (upper! - lower!);
-  return lowerVal + t * (upperVal - lowerVal);
+  return lower?.value;
 }
 
 /**
@@ -361,7 +351,7 @@ export function computeDisplayRange(
  * Strategy:
  * - Blended median = weighted average of bias-corrected model medians
  * - Uncertainty bands = weighted average of ensemble models' bands, shifted to center on blended median
- * - Beyond shorter models' ranges, remaining models pass through
+ * - Beyond shorter models' ranges, the remaining models carry the blend on alone
  */
 export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): ForecastData {
   const ensembleModels = forecasts.filter((f) => f.isEnsemble);
@@ -435,7 +425,8 @@ export function blendSingleVariable(
   useAccuracy: boolean = true,
 ): ForecastPoint[] {
   if (inputs.length === 0) return [];
-  if (inputs.length === 1) return inputs[0]!.points;
+  // A lone model still goes through blendVariable: it is bias-corrected and
+  // clamped just as it is where it is the only model with data in a blend
   const accuracy = useAccuracy ? lookupAccuracy(location, grid) : undefined;
   const biases = useAccuracy ? lookupBiases(location, grid) : undefined;
   return blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey], CLAMP_MAX[varKey]);
@@ -454,25 +445,8 @@ function toTimedSeries(points: ForecastPoint[]): TimedPoint[] {
   return series;
 }
 
-/**
- * A model's forecast at `timeMs`: its own point when it has one, otherwise
- * an estimate from the neighbouring points when they are at most
- * {@link MAX_INTERPOLATION_GAP_MS} apart. This lets a coarser model
- * (6-hourly AIFS) contribute at every step of a finer base model (3-hourly
- * GEFS) instead of dropping in and out of the blend every other step,
- * which made the blended line zigzag.
- *
- * Instantaneous values are interpolated linearly. With `intervalMean`,
- * each point is instead the mean over the interval ending at it (as
- * precipitation rates are), so the estimate is the next point: the
- * interval containing `timeMs`. Interpolating would bleed the previous
- * interval's rain into it.
- */
-function sampleAt(
-  series: TimedPoint[],
-  timeMs: number,
-  intervalMean: boolean,
-): ForecastPoint | undefined {
+/** Index of the first point in `series` at or after `timeMs` */
+function firstAtOrAfter(series: TimedPoint[], timeMs: number): number {
   let lo = 0;
   let hi = series.length;
   while (lo < hi) {
@@ -480,9 +454,22 @@ function sampleAt(
     if (series[mid]!.timeMs < timeMs) lo = mid + 1;
     else hi = mid;
   }
-  const after = series[lo];
+  return lo;
+}
+
+/**
+ * A model's forecast of an instantaneous value at `timeMs`: its own point
+ * when it has one, otherwise a linear interpolation of the neighbouring
+ * points when they are at most {@link MAX_INTERPOLATION_GAP_MS} apart. This
+ * lets a coarser model (6-hourly AIFS) contribute at every step of a finer
+ * base model (3-hourly GEFS) instead of dropping in and out of the blend
+ * every other step, which made the blended line zigzag.
+ */
+function sampleAt(series: TimedPoint[], timeMs: number): ForecastPoint | undefined {
+  const idx = firstAtOrAfter(series, timeMs);
+  const after = series[idx];
   if (after?.timeMs === timeMs) return after.point;
-  const before = series[lo - 1];
+  const before = series[idx - 1];
   if (!before || !after || after.timeMs - before.timeMs > MAX_INTERPOLATION_GAP_MS) {
     return undefined;
   }
@@ -490,12 +477,9 @@ function sampleAt(
   const lerp = (a: number, b: number) => a + (b - a) * f;
   const a = before.point;
   const b = after.point;
-  const time = new Date(timeMs).toISOString();
-  const hoursFromNow = lerp(a.hoursFromNow, b.hoursFromNow);
-  if (intervalMean) return { ...b, time, hoursFromNow };
   return {
-    time,
-    hoursFromNow,
+    time: new Date(timeMs).toISOString(),
+    hoursFromNow: lerp(a.hoursFromNow, b.hoursFromNow),
     median: lerp(a.median, b.median),
     p10: lerp(a.p10, b.p10),
     p90: lerp(a.p90, b.p90),
@@ -505,17 +489,87 @@ function sampleAt(
 }
 
 /**
+ * Start of the interval each point's mean covers, for series whose points
+ * are means over the interval ending at them (precipitation rates). The
+ * interval is the shorter of the gaps to its neighbours, so a skipped
+ * timestep doesn't stretch the next point's interval over it.
+ */
+function intervalStarts(series: TimedPoint[]): number[] {
+  return series.map(({ timeMs }, i) => {
+    const gap = Math.min(
+      timeMs - (series[i - 1]?.timeMs ?? -Infinity),
+      (series[i + 1]?.timeMs ?? Infinity) - timeMs,
+    );
+    return gap === Infinity ? timeMs : timeMs - gap;
+  });
+}
+
+/**
+ * A model's mean over the interval (startMs, endMs], for series whose
+ * points are means over the interval ending at them: the average of its
+ * intervals overlapping that one, weighted by overlap. A coarser model's
+ * 6-hour mean fills each 3-hour step it contains, and a finer model's
+ * hourly rates are averaged over the whole step instead of only the hour
+ * ending at it. Undefined unless the model covers the entire interval.
+ * `at` is the base model's point at `endMs`, supplying the time fields.
+ */
+function sampleIntervalMean(
+  series: TimedPoint[],
+  starts: number[],
+  startMs: number,
+  endMs: number,
+  at: ForecastPoint,
+): ForecastPoint | undefined {
+  if (startMs >= endMs) {
+    const exact = series[firstAtOrAfter(series, endMs)];
+    return exact?.timeMs === endMs ? exact.point : undefined;
+  }
+
+  let covered = 0;
+  const sum = { median: 0, p10: 0, p90: 0, min: 0, max: 0 };
+  for (let i = firstAtOrAfter(series, startMs + 1); i < series.length; i++) {
+    const { timeMs, point } = series[i]!;
+    const start = starts[i]!;
+    if (start >= endMs) break;
+    if (timeMs - start > MAX_INTERPOLATION_GAP_MS) continue;
+    const overlap = Math.min(timeMs, endMs) - Math.max(start, startMs);
+    if (overlap <= 0) continue;
+    covered += overlap;
+    sum.median += overlap * point.median;
+    sum.p10 += overlap * point.p10;
+    sum.p90 += overlap * point.p90;
+    sum.min += overlap * point.min;
+    sum.max += overlap * point.max;
+  }
+  if (covered < endMs - startMs) return undefined;
+
+  return {
+    time: at.time,
+    hoursFromNow: at.hoursFromNow,
+    median: sum.median / covered,
+    p10: sum.p10 / covered,
+    p90: sum.p90 / covered,
+    min: sum.min / covered,
+    max: sum.max / covered,
+  };
+}
+
+/**
  * Blend a single variable across N models.
  *
  * For each timestep of the base (first ensemble) model:
- * 1. Sample every model at that valid time (interpolating coarser models)
+ * 1. Sample every model at that valid time (interpolating coarser models),
+ *    or for precipitation over the base model's interval ending then
  * 2. Compute accuracy weights from each model's own lead time, with
  *    lead-time interpolation and regularization
  * 3. Subtract per-model bias before blending (bias correction), for
- *    variables that have a bias of their own
+ *    variables that have a bias of their own. This applies even where only
+ *    the base model has data, so the line doesn't jump where others end
  * 4. Blended median = weighted average of bias-corrected model medians
- * 5. Blended bands = weighted average of ensemble models' bands,
- *    shifted so center aligns with blended median
+ * 5. Blended bands = weighted average of ensemble models' bands, shifted
+ *    so center aligns with blended median. Precipitation bands are instead
+ *    widened just enough to contain the median: shifting a zero-bounded,
+ *    skewed distribution up would lift its dry members off zero
  */
 function blendVariable(
   varKey: ForecastVariable,
@@ -531,12 +585,19 @@ function blendVariable(
   // Use first ensemble model as base for timestep iteration
   const baseInput = inputs.find((i) => i.isEnsemble) ?? inputs[0]!;
 
+  // Precipitation points are mean rates over the interval ending at them
+  const intervalMean = varKey === "precipitation";
+
   const seriesByModel = new Map<ModelId, TimedPoint[]>();
+  const startsByModel = new Map<ModelId, number[]>();
   const initMsByModel = new Map<ModelId, number>();
   for (const input of inputs) {
-    seriesByModel.set(input.model, toTimedSeries(input.points));
+    const series = toTimedSeries(input.points);
+    seriesByModel.set(input.model, series);
+    if (intervalMean) startsByModel.set(input.model, intervalStarts(series));
     if (input.initTime) initMsByModel.set(input.model, new Date(input.initTime).getTime());
   }
+  const baseSeries = seriesByModel.get(baseInput.model)!;
 
   const ensembleModelIds = new Set(inputs.filter((i) => i.isEnsemble).map((i) => i.model));
   const clamp = (v: number) => {
@@ -549,17 +610,22 @@ function blendVariable(
   return baseInput.points.map((basePt) => {
     const timeMs = new Date(basePt.time).getTime();
 
+    // The interval the base point's mean covers, for interval-mean variables
+    const startMs = intervalMean
+      ? startsByModel.get(baseInput.model)![firstAtOrAfter(baseSeries, timeMs)]!
+      : timeMs;
+
     // Collect available models at this timestep
     const available: Array<{ model: ModelId; point: ForecastPoint }> = [];
     for (const input of inputs) {
-      const pt =
-        input === baseInput
-          ? basePt
-          : sampleAt(seriesByModel.get(input.model) ?? [], timeMs, varKey === "precipitation");
+      const series = seriesByModel.get(input.model)!;
+      let pt: ForecastPoint | undefined;
+      if (input === baseInput) pt = basePt;
+      else if (intervalMean) {
+        pt = sampleIntervalMean(series, startsByModel.get(input.model)!, startMs, timeMs, basePt);
+      } else pt = sampleAt(series, timeMs);
       if (pt) available.push({ model: input.model, point: pt });
     }
-
-    if (available.length <= 1) return basePt;
 
     // Each model's lead time at this valid time. Caches from before init
     // times were recorded fall back to hours from now.
@@ -619,18 +685,28 @@ function blendVariable(
       ensembleCenter += w * (point.median - bias);
     }
 
-    // Shift blended bands so they center on the blended median
-    // (which includes deterministic model contributions)
+    // With no ensemble at this step there is no spread: the bands collapse
+    // onto the median
+    if (ensembleAvailable.length === 0) {
+      blendedP10 = blendedP90 = blendedMin = blendedMax = ensembleCenter = blendedMedian;
+    }
+
+    // Precipitation bands widen just enough to contain the median; others
+    // shift so they center on the blended median (which includes
+    // deterministic model contributions)
+    const median = clamp(blendedMedian);
     const offset = blendedMedian - ensembleCenter;
+    const lower = (v: number) => clamp(intervalMean ? Math.min(v, median) : v + offset);
+    const upper = (v: number) => clamp(intervalMean ? Math.max(v, median) : v + offset);
 
     return {
       time: basePt.time,
       hoursFromNow: basePt.hoursFromNow,
-      median: clamp(blendedMedian),
-      p10: clamp(blendedP10 + offset),
-      p90: clamp(blendedP90 + offset),
-      min: clamp(blendedMin + offset),
-      max: clamp(blendedMax + offset),
+      median,
+      p10: lower(blendedP10),
+      p90: upper(blendedP90),
+      min: lower(blendedMin),
+      max: upper(blendedMax),
     };
   });
 }

@@ -43,13 +43,18 @@ const MAX_RADIUS_KM = 75;
 /** Minimum distance cap for IDW to avoid division issues */
 const MIN_DISTANCE_KM = 10;
 
-/** Variables of interest and their skill metrics in preference order.
- *  CRPS (Continuous Ranked Probability Score) is preferred for ensemble weighting
- *  because it evaluates the full forecast distribution, not just the mean.
- *  Bias-corrected variants remove systematic grid-to-station spatial offsets. */
+/** Variables of interest and the skill metric that weights each one.
+ *
+ *  Weights compare models against each other, so every model must be scored
+ *  with the same metric. CRPS only exists for ensembles — HRRR has none — and
+ *  runs well below a point error like RMSE, so mixing them made HRRR look
+ *  roughly twice as bad as it is. The blend averages each model's central
+ *  forecast, so a point error is also the right measure: RMSE_bc (error
+ *  after removing mean bias, as the blend does for temperature) and MAE for
+ *  precipitation, which every model has. */
 const VARIABLE_METRICS: Record<string, string[]> = {
-  temperature_2m: ["CRPS_bc", "RMSE_bc", "CRPS", "RMSE"],
-  precipitation_surface: ["CRPS", "MAE_bc", "MAE"],
+  temperature_2m: ["RMSE_bc"],
+  precipitation_surface: ["MAE"],
 };
 
 /** Bias metrics in preference order (for debiasing during blending).
@@ -187,7 +192,7 @@ async function main() {
     const hourBin = leadTimeToHourBin(r.lead_time);
     if (hourBin === undefined) continue;
 
-    // Collect skill metrics (CRPS_bc, RMSE_bc, etc.)
+    // Collect skill metrics (RMSE_bc, MAE)
     const acceptedMetrics = VARIABLE_METRICS[r.variable];
     if (acceptedMetrics) {
       const metricPriority = acceptedMetrics.indexOf(r.metric);
@@ -197,7 +202,7 @@ async function main() {
         const existing = storedPriority.get(priorityKey);
         if (existing === undefined || newPriority < existing) {
           if (existing === undefined) uniqueCount++;
-          if (metricPriority === 0) bcCount++;
+          if (r.metric.endsWith("_bc")) bcCount++;
           storedPriority.set(priorityKey, newPriority);
           if (modelId === "ECMWF AIFS") {
             aifsSourceUseCount.set(r.model, (aifsSourceUseCount.get(r.model) ?? 0) + 1);

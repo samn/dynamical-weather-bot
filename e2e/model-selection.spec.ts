@@ -220,31 +220,19 @@ test.describe("model selection controls", () => {
     await expect(page.locator("#equal-blend-btn")).not.toHaveClass(/active/);
   });
 
-  test("blend toggle is dimmed when only one model is selected", async ({ page }) => {
+  test("blend toggle switches modes when only one model is selected", async ({ page }) => {
     await showModelControls(page);
 
     await page.locator("#model-gefs").uncheck();
     await page.locator("#model-hrrr").uncheck();
     await page.locator("#model-aifs").uncheck();
 
-    // Only ECMWF remains — blend toggle should have .inactive class
-    await expect(page.locator("#magic-blend-btn")).toHaveClass(/inactive/);
-    await expect(page.locator("#equal-blend-btn")).toHaveClass(/inactive/);
-  });
-
-  test("blend toggle un-dims when second model is checked", async ({ page }) => {
-    await showModelControls(page);
-
-    // Get down to one model
-    await page.locator("#model-gefs").uncheck();
-    await page.locator("#model-hrrr").uncheck();
-    await page.locator("#model-aifs").uncheck();
-    await expect(page.locator("#magic-blend-btn")).toHaveClass(/inactive/);
-
-    // Re-enable a second model
-    await page.locator("#model-gefs").check();
-    await expect(page.locator("#magic-blend-btn")).not.toHaveClass(/inactive/);
-    await expect(page.locator("#equal-blend-btn")).not.toHaveClass(/inactive/);
+    // Only ECMWF remains — Magic Blend still bias-corrects it, so the
+    // toggle switches modes instead of re-enabling every model
+    await page.locator("#equal-blend-btn").click();
+    await expect(page.locator("#equal-blend-btn")).toHaveClass(/active/);
+    await expect(page.locator("#magic-blend-btn")).not.toHaveClass(/active/);
+    await expect(page.locator("#model-gefs")).not.toBeChecked();
   });
 
   test("model selection persists across page reloads", async ({ page }) => {

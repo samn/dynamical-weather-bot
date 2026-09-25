@@ -1,7 +1,6 @@
 /** Pure utility functions for the accuracy grid build, extracted for testability. */
 
-/** Lead time bins we care about (hours) — 0h through 72h at daily intervals */
-export const LEAD_BINS = [0, 24, 48, 72];
+import { LEAD_BINS } from "../src/types.js";
 
 /** Grid resolution in degrees */
 export const GRID_RES = 1.0;
