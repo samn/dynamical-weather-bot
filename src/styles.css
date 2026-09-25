@@ -496,10 +496,6 @@ button:hover {
   border-color: var(--accent);
 }
 
-.blend-btn.inactive {
-  opacity: 0.4;
-}
-
 /* Charts */
 #charts {
   display: grid;

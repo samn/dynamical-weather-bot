@@ -542,12 +542,6 @@ function syncModelControls(): void {
   const magic = getMagicBlend();
   magicBlendBtn.classList.toggle("active", magic);
   equalBlendBtn.classList.toggle("active", !magic);
-
-  // Dim blend toggle when only one model is selected (still clickable)
-  const enabledCount = [...enabled].filter((m) => !unavailableModels.has(m)).length;
-  const blendInactive = enabledCount <= 1;
-  magicBlendBtn.classList.toggle("inactive", blendInactive);
-  equalBlendBtn.classList.toggle("inactive", blendInactive);
 }
 
 /** One model's data for the current location, ready to fetch variables */
@@ -1308,15 +1302,10 @@ function toggleViewMode(): void {
 blendedViewBtn.addEventListener("click", toggleViewMode);
 perModelViewBtn.addEventListener("click", toggleViewMode);
 
-// Blend toggle — either button flips between magic / equal.
-// When only one model is selected, first click enables all sources.
+// Blend toggle — either button flips between magic / equal. It matters
+// even for a single model: Magic Blend bias-corrects it.
 function toggleBlendMode(): void {
-  const enabledCount = [...getEnabledModels()].filter((m) => !unavailableModels.has(m)).length;
-  if (enabledCount <= 1) {
-    setEnabledModels(new Set<ModelId>(availableModels()));
-  } else {
-    setMagicBlend(!getMagicBlend());
-  }
+  setMagicBlend(!getMagicBlend());
   syncModelControls();
   reblendAndRender();
 }

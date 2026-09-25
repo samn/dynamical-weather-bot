@@ -414,28 +414,38 @@ describe("computeWeights", () => {
     expect(weights.get("NOAA HRRR")).toBe(0);
   });
 
-  it("interpolates between lead time bins", () => {
+  it("interpolates between lead time bin midpoints", () => {
     const accuracy = {
       "NOAA GEFS": { temperature_2m: { "0": 2.0, "24": 3.0 } },
       "NOAA HRRR": { temperature_2m: { "0": 1.0, "24": 1.5 } },
     };
-    // At 0 hours: GEFS error=2, HRRR error=1
-    const w0 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 0, accuracy);
-    // Raw: GEFS=0.2, HRRR=0.8; regularized: GEFS=0.245, HRRR=0.755
-    expect(w0.get("NOAA GEFS")).toBeCloseTo(0.245, 3);
+    // Bin 0 scores leads 0–24h, so it applies in full up to its 12h midpoint:
+    // GEFS error=2, HRRR error=1. Raw: GEFS=0.2, HRRR=0.8; regularized 0.245
+    for (const lead of [0, 12]) {
+      const w = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", lead, accuracy);
+      expect(w.get("NOAA GEFS")).toBeCloseTo(0.245, 3);
+    }
 
-    // At 12 hours: interpolate between bins 0 and 24
+    // At 24 hours: halfway between the 12h and 36h midpoints
     // GEFS: 2 + 0.5*(3-2) = 2.5, HRRR: 1 + 0.5*(1.5-1) = 1.25
-    // Raw weights: GEFS=1/6.25, HRRR=1/1.5625, total = 0.16+0.64 = 0.8
-    const w12 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 12, accuracy);
-    const gefsErr12 = 2.5;
-    const hrrrErr12 = 1.25;
-    const gefsRaw = 1 / (gefsErr12 * gefsErr12);
-    const hrrrRaw = 1 / (hrrrErr12 * hrrrErr12);
-    const total = gefsRaw + hrrrRaw;
-    const gefsNorm = gefsRaw / total;
-    const gefsReg = 0.85 * gefsNorm + 0.15 * 0.5;
-    expect(w12.get("NOAA GEFS")).toBeCloseTo(gefsReg, 3);
+    const w24 = computeWeights(["NOAA GEFS", "NOAA HRRR"], "temperature_2m", 24, accuracy);
+    const gefsRaw = 1 / (2.5 * 2.5);
+    const hrrrRaw = 1 / (1.25 * 1.25);
+    const gefsReg = 0.85 * (gefsRaw / (gefsRaw + hrrrRaw)) + 0.15 * 0.5;
+    expect(w24.get("NOAA GEFS")).toBeCloseTo(gefsReg, 3);
+  });
+
+  it("holds the last bin's error past its midpoint", () => {
+    const accuracy = {
+      "NOAA GEFS": { temperature_2m: { "72": 4.0, "96": 2.0 } },
+      "ECMWF IFS ENS": { temperature_2m: { "72": 2.0, "96": 2.0 } },
+    };
+    // Past the 96h bin's 108h midpoint both errors are 2 → equal weights
+    const w = computeWeights(["NOAA GEFS", "ECMWF IFS ENS"], "temperature_2m", 120, accuracy);
+    expect(w.get("NOAA GEFS")).toBeCloseTo(0.5, 5);
+    // Before the first available bin's midpoint, that bin applies
+    const early = computeWeights(["NOAA GEFS", "ECMWF IFS ENS"], "temperature_2m", 0, accuracy);
+    expect(early.get("NOAA GEFS")).toBeCloseTo(0.85 * (1 / 16 / (1 / 16 + 1 / 4)) + 0.075, 5);
   });
 
   it("ignores models with zero error (treats as no data)", () => {
@@ -542,7 +552,7 @@ describe("blendForecasts", () => {
     expect(result.temperature[1]!.median).toBe(20);
   });
 
-  it("clamps precipitation to zero (never negative)", () => {
+  it("clamps non-negative variables to zero", () => {
     // HRRR predicts 0, GEFS predicts 2 with spread down to min=0.5
     // Blending shifts median down, which could push min below zero
     const gefs = makeGefs([{ median: 2, p10: 1, p90: 3, min: 0.5, max: 4, hoursFromNow: 0 }]);
@@ -552,11 +562,13 @@ describe("blendForecasts", () => {
 
     // With equal weights (no accuracy data), blended median = 1, offset = -1
     // min would be 0.5 + (-1) = -0.5, but should be clamped to 0
-    expect(result.precipitation[0]!.min).toBe(0);
-    expect(result.precipitation[0]!.p10).toBe(0);
-    // Wind and cloud cover should also be clamped
     expect(result.windSpeed[0]!.min).toBe(0);
+    expect(result.windSpeed[0]!.p10).toBe(0);
     expect(result.cloudCover[0]!.min).toBe(0);
+    // Precipitation bands aren't shifted, so the ensemble's spread stands
+    expect(result.precipitation[0]!.median).toBe(1);
+    expect(result.precipitation[0]!.p10).toBe(1);
+    expect(result.precipitation[0]!.min).toBe(0.5);
     // Temperature can be negative — no clamping
     expect(result.temperature[0]!.min).toBeCloseTo(-0.5, 5);
   });
@@ -638,6 +650,70 @@ describe("blendForecasts", () => {
     expect(result.temperature[1]!.median).toBe(9);
   });
 
+  it("averages a finer model's precipitation over the base model's step", () => {
+    // GEFS's +3h rate covers 0–3h; HRRR's hourly rates must all count, not
+    // just the hour ending at +3h
+    const gefs = makeGefs([0, 3].map((h) => ({ median: 1, hoursFromNow: h })));
+    const hrrr = makeHrrr([0, 1, 2, 3].map((h) => ({ median: [0, 6, 3, 0][h]!, hoursFromNow: h })));
+
+    const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
+
+    // HRRR's 0–3h mean is 3 → equal-weight blend with GEFS's 1 is 2
+    expect(result.precipitation[1]!.median).toBeCloseTo(2, 5);
+    // Temperature is instantaneous: HRRR's +3h value is used as-is
+    expect(result.temperature[1]!.median).toBeCloseTo(0.5, 5);
+  });
+
+  it("leaves a model out of a step its precipitation doesn't fully cover", () => {
+    // HRRR is missing its +2h rate: its +3h rate covers only 2–3h, so it
+    // can't estimate GEFS's 0–3h step
+    const gefs = makeGefs([0, 3].map((h) => ({ median: 1, hoursFromNow: h })));
+    const hrrr = makeHrrr([0, 1, 3, 4].map((h) => ({ median: 5, hoursFromNow: h })));
+
+    const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
+
+    expect(result.precipitation[1]!.median).toBe(1);
+  });
+
+  it("widens precipitation bands to contain the median instead of shifting them", () => {
+    // Every GEFS member is dry at the low end; HRRR's heavy rain raises the
+    // median above GEFS's p90. Shifting would put the whole range above 0.
+    const gefs = makeGefs([{ median: 0, p10: 0, p90: 1, min: 0, max: 2, hoursFromNow: 3 }]);
+    const hrrr = makeHrrr([{ median: 4, p10: 4, p90: 4, min: 4, max: 4, hoursFromNow: 3 }]);
+
+    const pt = blendForecasts([gefs, hrrr], EMPTY_GRID).precipitation[0]!;
+
+    expect(pt).toMatchObject({ median: 2, p10: 0, p90: 2, min: 0, max: 2 });
+  });
+
+  it("bias-corrects the base model where no other model has data", () => {
+    // HRRR ends after the first step; GEFS must stay debiased on its own
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.0, "48": 1.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 1.0 } },
+          },
+          biases: { "NOAA GEFS": { temperature_2m: { "0": 2.0, "48": 2.0 } } },
+        },
+      },
+    };
+    const gefs = makeGefs([
+      { median: 12, p10: 10, p90: 14, hoursFromNow: 0 },
+      { median: 12, p10: 10, p90: 14, hoursFromNow: 60 },
+    ]);
+    const hrrr = makeHrrr([{ median: 10, hoursFromNow: 0 }]);
+
+    const result = blendForecasts([gefs, hrrr], grid);
+
+    expect(result.temperature[0]!.median).toBeCloseTo(10, 5);
+    expect(result.temperature[1]).toMatchObject({ median: 10, p10: 8, p90: 12 });
+  });
+
   it("does not interpolate across gaps wider than 6 hours", () => {
     const gefs = makeGefs([{ median: 10, hoursFromNow: 6 }]);
     const ecmwf = makeEcmwf([
@@ -666,12 +742,13 @@ describe("blendForecasts", () => {
         },
       },
     };
-    const gefs = { ...makeGefs([{ median: 10 }]), initTime: "2026-03-15T00:00:00.000Z" };
+    // GEFS initialized 36h earlier: its lead is at bin 24's midpoint
+    const gefs = { ...makeGefs([{ median: 10 }]), initTime: "2026-03-14T12:00:00.000Z" };
     const hrrr = makeHrrr([{ median: 20 }]);
 
     const result = blendForecasts([gefs, hrrr], grid);
 
-    // GEFS at lead 24h: raw weights 1/16 vs 1/4 → HRRR dominates
+    // GEFS at lead 36h: raw weights 1/16 vs 1/4 → HRRR dominates
     const gefsW = 0.85 * (1 / 16 / (1 / 16 + 1 / 4)) + 0.15 * 0.5;
     expect(result.temperature[0]!.median).toBeCloseTo(gefsW * 10 + (1 - gefsW) * 20, 5);
   });
@@ -838,6 +915,36 @@ describe("blendSingleVariable", () => {
     expect(result[0]!.median).toBe(15);
   });
 
+  it("bias-corrects a single model like a blend's base-only steps", () => {
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: { "NOAA GEFS": { temperature_2m: { "0": 1.0 } } },
+          biases: { "NOAA GEFS": { temperature_2m: { "0": 2.0 } } },
+        },
+      },
+    };
+    const points = [makeForecastPoint({ median: 15, p10: 13, p90: 17 })];
+    const inputs = [{ model: "NOAA GEFS" as const, points, isEnsemble: true }];
+    const result = blendSingleVariable("temperature", inputs, TEST_LOC, grid);
+    expect(result[0]).toMatchObject({ median: 13, p10: 11, p90: 15 });
+  });
+
+  it("keeps a deterministic model's precipitation when no ensemble is present", () => {
+    const hrrrPoints = [0, 1].map((h) =>
+      makeForecastPoint({ median: 2, p10: 2, p90: 2, min: 2, max: 2, hoursFromNow: h }),
+    );
+    const inputs = [
+      { model: "NOAA HRRR" as const, points: hrrrPoints, isEnsemble: false },
+      { model: "NOAA HRRR" as const, points: hrrrPoints, isEnsemble: false },
+    ];
+    const result = blendSingleVariable("precipitation", inputs, TEST_LOC, EMPTY_GRID);
+    expect(result[1]).toMatchObject({ median: 2, p10: 2, p90: 2, min: 2, max: 2 });
+  });
+
   it("blends two models with accuracy and bias data", () => {
     const grid: AccuracyGrid = {
       gridResolution: 0.5,
@@ -925,10 +1032,24 @@ describe("blendSingleVariable", () => {
       { model: "ECMWF IFS ENS" as const, points: ecmwfPoints, isEnsemble: true },
     ];
     const result = blendSingleVariable("temperature", inputs, TEST_LOC, grid);
-    // At 36h: interpolate between 24h and 48h (t=0.5)
-    // GEFS error: 2 + 0.5*(3-2) = 2.5, ECMWF error: 2 + 0.5*(1-2) = 1.5
-    // ECMWF should get more weight since lower error at 36h
-    expect(result[0]!.median).toBeGreaterThan(13); // closer to ECMWF=20
+    // 36h is bin 24's midpoint: both errors are 2 → equal weights
+    expect(result[0]!.median).toBeCloseTo(15, 5);
+
+    // 48h is halfway between the 36h and 60h midpoints:
+    // GEFS error 2.5, ECMWF error 1.5 → ECMWF weighted more
+    const later = blendSingleVariable(
+      "temperature",
+      inputs.map((i) => ({
+        ...i,
+        points: i.points.map((pt) => makeForecastPoint({ median: pt.median, hoursFromNow: 48 })),
+      })),
+      TEST_LOC,
+      grid,
+    );
+    const g = 1 / 2.5 ** 2;
+    const e = 1 / 1.5 ** 2;
+    const gefsW = 0.85 * (g / (g + e)) + 0.075;
+    expect(later[0]!.median).toBeCloseTo(gefsW * 10 + (1 - gefsW) * 20, 5);
   });
 });
 

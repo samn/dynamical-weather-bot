@@ -1,6 +1,15 @@
 /** Hours past "now" the app forecasts (and fetches enough lead times to cover) */
 export const FORECAST_HORIZON_HOURS = 72;
 
+/** Lead time bins in the accuracy grid, keyed by their start (hours). The
+ *  scorecard scores whole days of lead time: bin 0 covers leads 0–24h, bin
+ *  24 covers 24–48h, and so on. Leads reach ~100h: 72h past now on a
+ *  once-daily run that may be over a day old. */
+export const LEAD_BINS = [0, 24, 48, 72, 96];
+
+/** Width of each accuracy-grid lead time bin (hours) */
+export const LEAD_BIN_WIDTH_HOURS = 24;
+
 /** Geographic coordinates */
 export interface LatLon {
   latitude: number;
@@ -72,18 +81,18 @@ export interface NearbyStation {
   id: string;
   latitude: number;
   longitude: number;
-  /** model → variable → lead_hours → error metric (CRPS_bc or RMSE_bc) */
+  /** model → variable → lead bin start hours → error metric (RMSE_bc or MAE) */
   metrics: Record<string, Record<string, Record<string, number>>>;
-  /** model → variable → lead_hours → signed bias (forecast - observed) */
+  /** model → variable → lead bin start hours → signed bias (forecast - observed) */
   biases?: Record<string, Record<string, Record<string, number>>>;
 }
 
 /** A single cell in the accuracy grid */
 export interface AccuracyCell {
   stationCount: number;
-  /** model → variable → lead_hours → error metric (CRPS_bc or RMSE_bc) */
+  /** model → variable → lead bin start hours → error metric (RMSE_bc or MAE) */
   metrics: Record<string, Record<string, Record<string, number>>>;
-  /** model → variable → lead_hours → signed bias (forecast - observed) */
+  /** model → variable → lead bin start hours → signed bias (forecast - observed) */
   biases?: Record<string, Record<string, Record<string, number>>>;
   nearbyStations?: NearbyStation[];
 }
