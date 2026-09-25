@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -7,7 +8,9 @@ export default defineConfig({
     emptyOutDir: true,
     target: "es2022",
     rolldownOptions: {
-      input: "src/index.html",
+      // Absolute, since the build resolves this from the project directory
+      // but the dev server's dependency scan resolves it from `root`
+      input: fileURLToPath(new URL("./src/index.html", import.meta.url)),
     },
   },
   server: {

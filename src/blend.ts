@@ -7,6 +7,7 @@ import type {
   ForecastVariable,
   LatLon,
 } from "./types.js";
+import { FORECAST_HORIZON_HOURS } from "./types.js";
 import { haversineKm } from "./geo.js";
 
 /** Max distance (km) for per-station IDW at runtime */
@@ -193,13 +194,19 @@ function interpolateBias(
 /**
  * Compute accuracy-based weights for a set of models at a given variable and lead time.
  * Weight = 1 / error², normalized to sum to 1, then regularized toward equal weights.
+ *
+ * `leadTimeHours` is either one lead time shared by every model or each
+ * model's own lead time — models initialized at different times reach the
+ * same valid time at different leads, and their skill depends on the lead.
  */
 export function computeWeights(
   models: ModelId[],
   variable: string,
-  leadTimeHours: number,
+  leadTimeHours: number | ReadonlyMap<ModelId, number>,
   accuracy: Record<string, Record<string, Record<string, number>>> | undefined,
 ): Map<ModelId, number> {
+  const leadFor = (model: ModelId): number =>
+    typeof leadTimeHours === "number" ? leadTimeHours : (leadTimeHours.get(model) ?? 0);
   const weights = new Map<ModelId, number>();
 
   if (!accuracy) {
@@ -213,7 +220,7 @@ export function computeWeights(
   const rawWeights: Array<[ModelId, number]> = [];
 
   for (const model of models) {
-    const error = interpolateError(leadTimeHours, accuracy[model], variable);
+    const error = interpolateError(leadFor(model), accuracy[model], variable);
     if (error !== undefined && error > 0) {
       const w = 1 / (error * error);
       rawWeights.push([model, w]);
@@ -255,37 +262,97 @@ export function computeWeights(
   return weights;
 }
 
-/** Variable names used in accuracy grid — use actual metric per variable */
-const VARIABLE_KEYS: Record<string, string> = {
+/**
+ * Accuracy-grid variable whose skill metric weights each forecast variable.
+ * Wind, cloud cover and dew point have no scorecard metrics yet, so
+ * temperature skill stands in as a proxy for overall model skill.
+ */
+const WEIGHT_KEYS: Record<ForecastVariable, string> = {
   temperature: "temperature_2m",
   precipitation: "precipitation_surface",
-  windSpeed: "temperature_2m", // proxy: wind metrics not yet in scorecard
-  cloudCover: "temperature_2m", // proxy: cloud metrics not yet in scorecard
+  windSpeed: "temperature_2m",
+  cloudCover: "temperature_2m",
+  dewPoint: "temperature_2m",
 };
+
+/**
+ * Accuracy-grid variable whose bias debiases each forecast variable.
+ *
+ * Unlike skill weights, a bias can't stand in for another variable: it is
+ * an offset in its own variable's units, so subtracting a temperature bias
+ * (°C) from wind speed or cloud cover corrupts them. Precipitation is left
+ * uncorrected too — it is bounded at zero, so an additive correction would
+ * add phantom drizzle to every dry hour.
+ */
+const BIAS_KEYS: Partial<Record<ForecastVariable, string>> = {
+  temperature: "temperature_2m",
+};
+
+/** Largest gap between a model's timesteps that is interpolated across to
+ *  line it up with the base model's timesteps (e.g. 6-hourly AIFS onto
+ *  3-hourly GEFS) */
+const MAX_INTERPOLATION_GAP_MS = 6 * 60 * 60 * 1000;
 
 /** Input for blending a single variable from one model */
 export interface ModelVariableInput {
   model: ModelId;
   points: ForecastPoint[];
   isEnsemble: boolean;
+  /** ISO init time of the model run the points came from. Used to compute
+   *  each point's lead time for accuracy weighting; absent in caches
+   *  written before it was recorded. */
+  initTime?: string;
 }
 
-/** Compute the intersection time range across all model inputs.
- *  Returns [startMs, endMs] or undefined if inputs are empty/non-overlapping. */
-export function computeCommonTimeRange(inputs: ModelVariableInput[]): [number, number] | undefined {
-  let latestStart = -Infinity;
-  let earliestEnd = Infinity;
-  for (const input of inputs) {
-    if (input.points.length === 0) continue;
-    const start = new Date(input.points[0]!.time).getTime();
-    const end = new Date(input.points[input.points.length - 1]!.time).getTime();
-    if (start > latestStart) latestStart = start;
-    if (end < earliestEnd) earliestEnd = end;
+/**
+ * The time range [startMs, endMs] the charts are drawn over, computed from
+ * every variable's per-model inputs.
+ *
+ * - Only `enabled` models count (all of them if none of the enabled models
+ *   has data), so disabling a short-range model lets the charts extend.
+ * - Each model spans from its earliest to its latest point across all
+ *   variables — a model's precipitation starts a step late, since it is
+ *   undefined at lead 0, and that must not push the chart start back.
+ * - Start: the latest model start, where every model has begun.
+ * - End: the earliest end among ensemble models, capped at the forecast
+ *   horizon. The deterministic HRRR only runs 48h; past its end the
+ *   ensembles carry the blend on alone.
+ *
+ * Returns undefined when there is no data or no overlap.
+ */
+export function computeDisplayRange(
+  inputsByVariable: Iterable<ModelVariableInput[]>,
+  enabled: ReadonlySet<ModelId> | undefined,
+  nowMs: number,
+  horizonHours: number = FORECAST_HORIZON_HOURS,
+): [number, number] | undefined {
+  const spans = new Map<ModelId, { start: number; end: number; isEnsemble: boolean }>();
+  for (const inputs of inputsByVariable) {
+    for (const input of inputs) {
+      for (const pt of input.points) {
+        const t = new Date(pt.time).getTime();
+        const span = spans.get(input.model);
+        if (!span) {
+          spans.set(input.model, { start: t, end: t, isEnsemble: input.isEnsemble });
+        } else {
+          span.start = Math.min(span.start, t);
+          span.end = Math.max(span.end, t);
+        }
+      }
+    }
   }
-  if (latestStart === -Infinity || earliestEnd === Infinity || latestStart >= earliestEnd) {
-    return undefined;
+
+  let models = [...spans.entries()];
+  if (enabled && models.some(([m]) => enabled.has(m))) {
+    models = models.filter(([m]) => enabled.has(m));
   }
-  return [latestStart, earliestEnd];
+  if (models.length === 0) return undefined;
+
+  const start = Math.max(...models.map(([, s]) => s.start));
+  const ensembles = models.filter(([, s]) => s.isEnsemble);
+  const endModels = ensembles.length > 0 ? ensembles : models;
+  const end = Math.min(...endModels.map(([, s]) => s.end), nowMs + horizonHours * 60 * 60 * 1000);
+  return start < end ? [start, end] : undefined;
 }
 
 /**
@@ -321,6 +388,7 @@ export function blendForecasts(forecasts: ModelForecast[], grid: AccuracyGrid): 
       model: f.model,
       points: f[varKey] ?? [],
       isEnsemble: f.isEnsemble,
+      initTime: f.initTime,
     }));
     result[varKey] = blendVariable(
       varKey,
@@ -373,38 +441,101 @@ export function blendSingleVariable(
   return blendVariable(varKey, inputs, accuracy, biases, CLAMP_MIN[varKey], CLAMP_MAX[varKey]);
 }
 
+/** A forecast point with its parsed valid time */
+interface TimedPoint {
+  timeMs: number;
+  point: ForecastPoint;
+}
+
+/** Sort a series by valid time for {@link sampleAt} */
+function toTimedSeries(points: ForecastPoint[]): TimedPoint[] {
+  const series = points.map((point) => ({ timeMs: new Date(point.time).getTime(), point }));
+  series.sort((a, b) => a.timeMs - b.timeMs);
+  return series;
+}
+
+/**
+ * A model's forecast at `timeMs`: its own point when it has one, otherwise
+ * an estimate from the neighbouring points when they are at most
+ * {@link MAX_INTERPOLATION_GAP_MS} apart. This lets a coarser model
+ * (6-hourly AIFS) contribute at every step of a finer base model (3-hourly
+ * GEFS) instead of dropping in and out of the blend every other step,
+ * which made the blended line zigzag.
+ *
+ * Instantaneous values are interpolated linearly. With `intervalMean`,
+ * each point is instead the mean over the interval ending at it (as
+ * precipitation rates are), so the estimate is the next point: the
+ * interval containing `timeMs`. Interpolating would bleed the previous
+ * interval's rain into it.
+ */
+function sampleAt(
+  series: TimedPoint[],
+  timeMs: number,
+  intervalMean: boolean,
+): ForecastPoint | undefined {
+  let lo = 0;
+  let hi = series.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (series[mid]!.timeMs < timeMs) lo = mid + 1;
+    else hi = mid;
+  }
+  const after = series[lo];
+  if (after?.timeMs === timeMs) return after.point;
+  const before = series[lo - 1];
+  if (!before || !after || after.timeMs - before.timeMs > MAX_INTERPOLATION_GAP_MS) {
+    return undefined;
+  }
+  const f = (timeMs - before.timeMs) / (after.timeMs - before.timeMs);
+  const lerp = (a: number, b: number) => a + (b - a) * f;
+  const a = before.point;
+  const b = after.point;
+  const time = new Date(timeMs).toISOString();
+  const hoursFromNow = lerp(a.hoursFromNow, b.hoursFromNow);
+  if (intervalMean) return { ...b, time, hoursFromNow };
+  return {
+    time,
+    hoursFromNow,
+    median: lerp(a.median, b.median),
+    p10: lerp(a.p10, b.p10),
+    p90: lerp(a.p90, b.p90),
+    min: lerp(a.min, b.min),
+    max: lerp(a.max, b.max),
+  };
+}
+
 /**
  * Blend a single variable across N models.
  *
- * For each timestep:
- * 1. Collect matching points from all models (by rounded hoursFromNow)
- * 2. Compute accuracy weights with lead-time interpolation and regularization
- * 3. Subtract per-model bias before blending (bias correction)
+ * For each timestep of the base (first ensemble) model:
+ * 1. Sample every model at that valid time (interpolating coarser models)
+ * 2. Compute accuracy weights from each model's own lead time, with
+ *    lead-time interpolation and regularization
+ * 3. Subtract per-model bias before blending (bias correction), for
+ *    variables that have a bias of their own
  * 4. Blended median = weighted average of bias-corrected model medians
  * 5. Blended bands = weighted average of ensemble models' bands,
  *    shifted so center aligns with blended median
  */
 function blendVariable(
-  varKey: string,
+  varKey: ForecastVariable,
   inputs: ModelVariableInput[],
   accuracy: Record<string, Record<string, Record<string, number>>> | undefined,
   biases: Record<string, Record<string, Record<string, number>>> | undefined,
   clampMin?: number,
   clampMax?: number,
 ): ForecastPoint[] {
-  const accuracyVarKey = VARIABLE_KEYS[varKey] ?? "temperature_2m";
+  const weightKey = WEIGHT_KEYS[varKey];
+  const biasKey = BIAS_KEYS[varKey];
 
   // Use first ensemble model as base for timestep iteration
   const baseInput = inputs.find((i) => i.isEnsemble) ?? inputs[0]!;
 
-  // Build lookup maps: model -> hour -> point
-  const pointsByModel = new Map<ModelId, Map<number, ForecastPoint>>();
+  const seriesByModel = new Map<ModelId, TimedPoint[]>();
+  const initMsByModel = new Map<ModelId, number>();
   for (const input of inputs) {
-    const byHour = new Map<number, ForecastPoint>();
-    for (const pt of input.points) {
-      byHour.set(Math.round(pt.hoursFromNow), pt);
-    }
-    pointsByModel.set(input.model, byHour);
+    seriesByModel.set(input.model, toTimedSeries(input.points));
+    if (input.initTime) initMsByModel.set(input.model, new Date(input.initTime).getTime());
   }
 
   const ensembleModelIds = new Set(inputs.filter((i) => i.isEnsemble).map((i) => i.model));
@@ -416,31 +547,43 @@ function blendVariable(
   };
 
   return baseInput.points.map((basePt) => {
-    const hour = Math.round(basePt.hoursFromNow);
+    const timeMs = new Date(basePt.time).getTime();
 
     // Collect available models at this timestep
     const available: Array<{ model: ModelId; point: ForecastPoint }> = [];
     for (const input of inputs) {
-      const pt = pointsByModel.get(input.model)?.get(hour);
+      const pt =
+        input === baseInput
+          ? basePt
+          : sampleAt(seriesByModel.get(input.model) ?? [], timeMs, varKey === "precipitation");
       if (pt) available.push({ model: input.model, point: pt });
     }
 
     if (available.length <= 1) return basePt;
 
+    // Each model's lead time at this valid time. Caches from before init
+    // times were recorded fall back to hours from now.
+    const leadHours = new Map<ModelId, number>();
+    for (const { model } of available) {
+      const initMs = initMsByModel.get(model);
+      const lead =
+        initMs !== undefined ? (timeMs - initMs) / (60 * 60 * 1000) : basePt.hoursFromNow;
+      leadHours.set(model, Math.max(0, lead));
+    }
+
     // Compute weights with lead-time interpolation and regularization
     const weights = computeWeights(
       available.map((a) => a.model),
-      accuracyVarKey,
-      Math.max(0, basePt.hoursFromNow),
+      weightKey,
+      leadHours,
       accuracy,
     );
 
     // Compute per-model bias corrections
     const modelBias = new Map<ModelId, number>();
     for (const { model } of available) {
-      const bias = biases
-        ? interpolateBias(Math.max(0, basePt.hoursFromNow), biases[model], accuracyVarKey)
-        : 0;
+      const bias =
+        biases && biasKey ? interpolateBias(leadHours.get(model) ?? 0, biases[model], biasKey) : 0;
       modelBias.set(model, bias);
     }
 

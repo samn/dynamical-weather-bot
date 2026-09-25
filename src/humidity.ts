@@ -17,14 +17,18 @@ export function dewPointFromRelativeHumidity(tempC: number, rhPct: number): numb
 }
 
 /**
- * Relative humidity (%) from air temperature (°C) and dew point (°C).
- * Inverse of {@link dewPointFromRelativeHumidity}; used to feed the
- * heat-index formula, which is defined in terms of relative humidity.
+ * Relative humidity (%) from air temperature (°C) and dew point (°C),
+ * capped at 100%. Inverse of {@link dewPointFromRelativeHumidity}; used to
+ * feed the heat-index formula, which is defined in terms of relative
+ * humidity.
  */
 export function relativeHumidityFromDewPoint(tempC: number, dewPointC: number): number {
   const gammaDew = (MAGNUS_B * dewPointC) / (MAGNUS_C + dewPointC);
   const gammaTemp = (MAGNUS_B * tempC) / (MAGNUS_C + tempC);
-  return 100 * Math.exp(gammaDew - gammaTemp);
+  // Temperature and dew point are blended separately, so a blended dew
+  // point can land above the blended temperature; air can't hold more than
+  // saturation, so cap at 100% rather than inflate the heat index
+  return Math.min(100, 100 * Math.exp(gammaDew - gammaTemp));
 }
 
 /**
@@ -132,7 +136,7 @@ export function humidityIndex(dewPointC: number): HumidityIndex {
  *
  * Each temperature quantile (min, p10, median, p90, max) is mapped through
  * {@link feelsLike} at the *median* dew point and wind speed for that
- * timestep (matched by rounded hoursFromNow). Holding humidity and wind
+ * timestep (matched by valid time). Holding humidity and wind
  * fixed keeps the transform monotonic in temperature, so the quantile band
  * stays ordered — pairing each temperature quantile with the same-named
  * wind quantile would not, since wind chill decreases with wind speed and
@@ -150,13 +154,13 @@ export function computeFeelsLike(
   dewPoint: ForecastPoint[],
   windSpeed: ForecastPoint[],
 ): ForecastPoint[] {
-  const dewByHour = indexByHour(dewPoint);
-  const windByHour = indexByHour(windSpeed);
+  const dewByTime = indexByTime(dewPoint);
+  const windByTime = indexByTime(windSpeed);
 
   return temperature.map((t) => {
-    const hour = Math.round(t.hoursFromNow);
-    const dp = dewByHour.get(hour);
-    const wind = windByHour.get(hour);
+    const timeMs = Date.parse(t.time);
+    const dp = dewByTime.get(timeMs);
+    const wind = windByTime.get(timeMs);
     if (!dp || !wind) return { ...t };
     const apparent = (v: number) => feelsLike(v, dp.median, wind.median);
     const sorted = [t.min, t.p10, t.median, t.p90, t.max].map(apparent);
@@ -174,13 +178,15 @@ export function computeFeelsLike(
 }
 
 /**
- * Index a forecast series by rounded hoursFromNow so series sampled at the
- * same timesteps (temperature, dew point, wind) can be joined.
+ * Index a forecast series by valid time (ms) so series sampled at the same
+ * timesteps (temperature, dew point, wind) can be joined. Joining on valid
+ * time rather than hoursFromNow keeps series fetched at different moments
+ * aligned — hoursFromNow is relative to each fetch's clock.
  */
-export function indexByHour(points: ForecastPoint[]): Map<number, ForecastPoint> {
-  const byHour = new Map<number, ForecastPoint>();
-  for (const p of points) byHour.set(Math.round(p.hoursFromNow), p);
-  return byHour;
+export function indexByTime(points: ForecastPoint[]): Map<number, ForecastPoint> {
+  const byTime = new Map<number, ForecastPoint>();
+  for (const p of points) byTime.set(Date.parse(p.time), p);
+  return byTime;
 }
 
 function fahrenheitToCelsius(f: number): number {

@@ -99,8 +99,11 @@ test.describe("real forecast integration", () => {
     for (const varName of variables) {
       const points = forecast[varName] as CachedPoint[];
       expect(points, `${varName} should exist`).toBeDefined();
+      // 3-hourly steps from the base model's init until 72h past now. GEFS
+      // runs once a day and can be ~30h old before the next run lands, so
+      // up to (30 + 72) / 3 + 1 = 35 steps.
       expect(points.length, `${varName} point count`).toBeGreaterThanOrEqual(20);
-      expect(points.length).toBeLessThanOrEqual(30);
+      expect(points.length, `${varName} point count`).toBeLessThanOrEqual(35);
 
       // Quantile ordering: min ≤ p10 ≤ median ≤ p90 ≤ max
       // (skip points with null/NaN values — JSON serialization converts NaN to null)
@@ -133,12 +136,12 @@ test.describe("real forecast integration", () => {
         expect(gapH).toBeLessThan(7);
       }
 
-      // Time span ~72 hours
-      const first = new Date(points[0]!.time).getTime();
+      // Series reach the 72h horizon past now (fetched up to the first
+      // lead time at or past it, so at most one 3h step beyond)
       const last = new Date(points[points.length - 1]!.time).getTime();
-      const spanH = (last - first) / (3600 * 1000);
-      expect(spanH, `${varName} spans ~72h`).toBeGreaterThan(60);
-      expect(spanH).toBeLessThanOrEqual(80);
+      const aheadH = (last - Date.now()) / (3600 * 1000);
+      expect(aheadH, `${varName} reaches ~72h ahead`).toBeGreaterThanOrEqual(71);
+      expect(aheadH, `${varName} reaches ~72h ahead`).toBeLessThanOrEqual(76);
     }
 
     // ── Variable-specific value ranges (skip null/NaN points) ──
@@ -503,6 +506,32 @@ test.describe("real forecast integration", () => {
   });
 
   // ─── Test 6: Cache-based reload performance ─────────────────────────
+
+  test("still loads when one model's data store is down", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.addInitScript(() => localStorage.clear());
+    await proxyExternalRequests(page);
+    // Registered after the proxy, so it takes precedence for this store
+    await page.route("**/dynamical-ecmwf-aifs-ens.s3.us-west-2.amazonaws.com/**", (route) =>
+      route.abort("failed"),
+    );
+    await page.goto("/?lat=40.75&lon=-74");
+    await waitForForecastLoad(page);
+
+    await expect(page.locator("#error")).toHaveClass(/hidden/);
+    for (const chartId of ["temp-chart", "precip-chart", "wind-chart", "cloud-chart"]) {
+      expect(await canvasHasContent(page, chartId), `${chartId} rendered`).toBe(true);
+    }
+    // AIFS is marked unavailable and left out; the other models are blended
+    const aifsLabel = page.locator(".model-checkbox", { has: page.locator("#model-aifs") });
+    await expect(aifsLabel).toHaveClass(/unavailable/);
+    await expect(page.locator("#model-aifs")).not.toBeChecked();
+    const entry = await extractCacheEntry(page);
+    const modelInputs = entry!.modelInputs as Record<string, CachedModelInput[]>;
+    const models = modelInputs.temperature!.map((i) => i.model);
+    expect(models).toContain("NOAA GEFS");
+    expect(models).not.toContain("ECMWF AIFS");
+  });
 
   test("cached forecast loads quickly on page reload", async ({ page }) => {
     test.setTimeout(60_000);

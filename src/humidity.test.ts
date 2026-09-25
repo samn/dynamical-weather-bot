@@ -10,9 +10,12 @@ import {
 } from "./humidity.js";
 import type { ForecastPoint } from "./types.js";
 
+/** A forecast point; unless given, its valid time follows its hoursFromNow */
 function makePoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
-    time: "2026-07-29T00:00:00.000Z",
+    time: new Date(
+      Date.parse("2026-07-29T00:00:00.000Z") + (overrides.hoursFromNow ?? 0) * 3600 * 1000,
+    ).toISOString(),
     hoursFromNow: 0,
     median: 20,
     p10: 18,
@@ -49,6 +52,11 @@ describe("relativeHumidityFromDewPoint", () => {
   it("round-trips with dewPointFromRelativeHumidity", () => {
     const dp = dewPointFromRelativeHumidity(22, 45);
     expect(relativeHumidityFromDewPoint(22, dp)).toBeCloseTo(45, 2);
+  });
+
+  it("caps at 100% when the dew point exceeds the temperature", () => {
+    // Separately blended series can put the dew point above the temperature
+    expect(relativeHumidityFromDewPoint(20, 22)).toBe(100);
   });
 });
 
@@ -174,7 +182,7 @@ describe("computeFeelsLike", () => {
     expect(result[0]!.min).toBeCloseTo(feelsLike(32, 24, 2), 5);
   });
 
-  it("aligns by hoursFromNow regardless of array order", () => {
+  it("aligns by valid time regardless of array order", () => {
     const reversedDew = dewPoint.map((_, i) => dewPoint[dewPoint.length - 1 - i]!);
     const reversedWind = windSpeed.map((_, i) => windSpeed[windSpeed.length - 1 - i]!);
     const result = computeFeelsLike(temperature, reversedDew, reversedWind);

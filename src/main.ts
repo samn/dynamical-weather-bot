@@ -1,40 +1,21 @@
 import type {
   LatLon,
   ForecastData,
+  ForecastPoint,
   ForecastVariable,
   GridVariable,
   Aberration,
   AccuracyGrid,
 } from "./types.js";
 import { getGeolocation, zipToLatLon } from "./geo.js";
-import {
-  fetchGefsForecast,
-  fetchGefsMetadata,
-  fetchGefsVariable,
-  fetchLatestInitTime,
-} from "./weather.js";
-import {
-  fetchHrrrForecast,
-  fetchHrrrMetadata,
-  fetchHrrrVariable,
-  fetchLatestHrrrInitTime,
-} from "./hrrr.js";
-import {
-  fetchEcmwfForecast,
-  fetchEcmwfMetadata,
-  fetchEcmwfVariable,
-  fetchLatestEcmwfInitTime,
-} from "./ecmwf.js";
-import {
-  fetchAifsForecast,
-  fetchAifsMetadata,
-  fetchAifsVariable,
-  fetchLatestAifsInitTime,
-} from "./aifs.js";
+import { fetchGefsMetadata, fetchGefsVariable, fetchLatestInitTime } from "./weather.js";
+import { fetchHrrrMetadata, fetchHrrrVariable, fetchLatestHrrrInitTime } from "./hrrr.js";
+import { fetchEcmwfMetadata, fetchEcmwfVariable, fetchLatestEcmwfInitTime } from "./ecmwf.js";
+import { fetchAifsMetadata, fetchAifsVariable, fetchLatestAifsInitTime } from "./aifs.js";
 import type { ModelId } from "./types.js";
 import {
   blendSingleVariable,
-  computeCommonTimeRange,
+  computeDisplayRange,
   computeWeights,
   lookupAccuracy,
   type ModelVariableInput,
@@ -59,6 +40,7 @@ import {
 } from "./chart.js";
 import { computeFeelsLike } from "./humidity.js";
 import { getCached, setCache } from "./cache.js";
+import { readStorage, writeStorage } from "./storage.js";
 import { formatInitTime } from "./format.js";
 import { getLocationFromUrl, setLocationInUrl } from "./url-params.js";
 import {
@@ -118,51 +100,37 @@ const SHOW_DEWPOINT_KEY = "show-dewpoint";
 const DEWPOINT_COLOR = "#4dd0e1";
 
 function getTempMode(): TempMode {
-  return localStorage.getItem(TEMP_MODE_KEY) === "feels-like" ? "feels-like" : "actual";
+  return readStorage(TEMP_MODE_KEY) === "feels-like" ? "feels-like" : "actual";
 }
 function setTempMode(mode: TempMode): void {
-  localStorage.setItem(TEMP_MODE_KEY, mode);
+  writeStorage(TEMP_MODE_KEY, mode);
 }
 function getShowDewPoint(): boolean {
-  return localStorage.getItem(SHOW_DEWPOINT_KEY) === "true";
+  return readStorage(SHOW_DEWPOINT_KEY) === "true";
 }
 function setShowDewPoint(show: boolean): void {
-  localStorage.setItem(SHOW_DEWPOINT_KEY, String(show));
+  writeStorage(SHOW_DEWPOINT_KEY, String(show));
 }
 
-/** Load bundled accuracy grid data, or return empty grid if not available */
-function loadAccuracyGrid(): AccuracyGrid {
-  try {
-    // Bundled by Vite at build time via JSON import
-    // Falls back to empty grid if not yet generated
-    return accuracyGridState;
-  } catch {
-    return {
-      gridResolution: 0.5,
-      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
-      cells: {},
-    };
-  }
-}
-
+/** Accuracy grid used for Magic Blend weights. Starts empty (equal weights)
+ *  until the bundled grid, loaded as a separate chunk, arrives. */
 let accuracyGridState: AccuracyGrid = {
-  gridResolution: 0.5,
+  gridResolution: 1,
   bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
   cells: {},
 };
 
-// Attempt to load accuracy grid asynchronously
-try {
-  import("./generated/accuracy-grid.json").then(
-    (mod) => {
-      accuracyGridState = mod.default as AccuracyGrid;
-    },
-    () => {
-      // Grid not generated yet — will use empty grid (GEFS-only weights)
-    },
-  );
-} catch {
-  // Static import analysis may fail — that's fine
+import("./generated/accuracy-grid.json").then(
+  (mod) => {
+    accuracyGridState = mod.default as AccuracyGrid;
+  },
+  () => {
+    // Grid chunk failed to load — keep the empty grid (equal weights)
+  },
+);
+
+function loadAccuracyGrid(): AccuracyGrid {
+  return accuracyGridState;
 }
 
 /** Store last data for re-rendering on resize and unit toggle */
@@ -172,7 +140,31 @@ let lastForecast: ForecastData | null = null;
 let cachedModelInputs: Map<ForecastVariable, ModelVariableInput[]> | null = null;
 let cachedLocation: LatLon | null = null;
 let cachedInitTime: string | null = null;
-let hrrrAvailable = true;
+
+/** Every model, in the fixed order inputs are blended in */
+const ALL_MODELS: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS", "NOAA HRRR"];
+
+/** Models with no data for the current location: outside their coverage
+ *  (HRRR outside CONUS) or their data store failed */
+let unavailableModels = new Set<ModelId>();
+
+/** Models with data for the current location */
+function availableModels(): ModelId[] {
+  return ALL_MODELS.filter((m) => !unavailableModels.has(m));
+}
+
+/**
+ * The inputs to show for a variable: the enabled models' inputs, or every
+ * model's when none of the enabled models has data — e.g. only HRRR is
+ * selected and the location is outside its coverage, or its store failed.
+ */
+function selectInputs(
+  inputs: ModelVariableInput[],
+  enabled: ReadonlySet<ModelId>,
+): ModelVariableInput[] {
+  const filtered = inputs.filter((i) => enabled.has(i.model));
+  return filtered.length > 0 ? filtered : inputs;
+}
 
 /** Fixed time range [startMs, endMs] computed from all models so x-axis stays stable */
 let cachedTimeRange: [number, number] | undefined;
@@ -186,9 +178,10 @@ function updateRainbowTimes(forecast: ForecastData): void {
   cachedRainbowTimes = detectRainbowWindows(forecast).map((w) => (w.startMs + w.endMs) / 2);
 }
 
+/** Recompute the chart time range from every variable's inputs, for the
+ *  currently enabled models */
 function updateCachedTimeRange(inputs: Map<ForecastVariable, ModelVariableInput[]>): void {
-  const firstVar = inputs.values().next().value;
-  cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
+  cachedTimeRange = computeDisplayRange(inputs.values(), getEnabledModels(), Date.now());
 }
 
 /** Last selected zip code for display */
@@ -366,7 +359,7 @@ function chartOptsForVariable(variable: GridVariable): {
  * overlay are applied using its dew point and wind series. */
 function renderVariableChart(
   variable: GridVariable,
-  data: import("./types.js").ForecastPoint[],
+  data: ForecastPoint[],
   overlaySeries?: ChartOverlaySeries[],
   tempForecast?: ForecastData,
 ): void {
@@ -427,17 +420,16 @@ const BLEND_VARIABLES: ForecastVariable[] = [...GRID_VARIABLES, "dewPoint"];
 function blendForecastData(
   location: LatLon,
   initTime: string,
-  enabledModels: Set<import("./types.js").ModelId>,
+  enabledModels: Set<ModelId>,
   useMagic: boolean,
   grid: AccuracyGrid,
 ): ForecastData {
-  const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
+  const results: Partial<Record<ForecastVariable, ForecastPoint[]>> = {};
   for (const varKey of BLEND_VARIABLES) {
     const allInputs = cachedModelInputs!.get(varKey);
-    if (!allInputs) continue;
-    const filtered = allInputs.filter((i) => enabledModels.has(i.model));
-    if (filtered.length === 0) continue;
-    results[varKey] = blendSingleVariable(varKey, filtered, location, grid, useMagic);
+    if (!allInputs || allInputs.length === 0) continue;
+    const inputs = selectInputs(allInputs, enabledModels);
+    results[varKey] = blendSingleVariable(varKey, inputs, location, grid, useMagic);
   }
   return {
     location,
@@ -460,6 +452,8 @@ function reblendAndRender(): void {
   const viewMode = getViewMode();
   const useMagic = getMagicBlend();
   const grid = loadAccuracyGrid();
+  // The enabled models (and the clock) decide how far the charts extend
+  updateCachedTimeRange(cachedModelInputs);
 
   // The blended forecast drives aberrations, rainbow markers, and (in
   // per-model view too) the dew point / feels-like series on the temp chart.
@@ -471,9 +465,8 @@ function reblendAndRender(): void {
     // Per-model (unaggregated) view: show each model's quantiles overlaid
     for (const varKey of GRID_VARIABLES) {
       const allInputs = cachedModelInputs.get(varKey);
-      if (!allInputs) continue;
-      const filtered = allInputs.filter((i) => enabledModels.has(i.model));
-      if (filtered.length === 0) continue;
+      if (!allInputs || allInputs.length === 0) continue;
+      const filtered = selectInputs(allInputs, enabledModels);
 
       const overlays: ChartOverlaySeries[] = filtered.map((input) => ({
         data: input.points,
@@ -507,20 +500,23 @@ function syncModelControls(): void {
   modelEcmwfCheckbox.checked = enabled.has("ECMWF IFS ENS");
   modelAifsCheckbox.checked = enabled.has("ECMWF AIFS");
 
-  // HRRR availability
-  const hrrrLabel = modelHrrrCheckbox.closest(".model-checkbox") as HTMLElement | null;
-  if (hrrrLabel) {
-    hrrrLabel.classList.toggle("unavailable", !hrrrAvailable);
-  }
-  if (!hrrrAvailable) {
-    modelHrrrCheckbox.checked = false;
+  // Mark models without data here (outside coverage or failed) and show
+  // them unchecked
+  const checkboxes: Array<[HTMLInputElement, ModelId]> = [
+    [modelGefsCheckbox, "NOAA GEFS"],
+    [modelHrrrCheckbox, "NOAA HRRR"],
+    [modelEcmwfCheckbox, "ECMWF IFS ENS"],
+    [modelAifsCheckbox, "ECMWF AIFS"],
+  ];
+  for (const [checkbox, model] of checkboxes) {
+    const unavailable = unavailableModels.has(model);
+    const label = checkbox.closest(".model-checkbox") as HTMLElement | null;
+    label?.classList.toggle("unavailable", unavailable);
+    if (unavailable) checkbox.checked = false;
   }
 
   // Select-all glyph state
-  const allAvailable: ModelId[] = hrrrAvailable
-    ? ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"]
-    : ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
-  const allSelected = allAvailable.every((m) => enabled.has(m));
+  const allSelected = availableModels().every((m) => enabled.has(m));
   selectAllModels.textContent = allSelected ? "\u2611" : "\u2610";
 
   // View toggle state
@@ -535,13 +531,7 @@ function syncModelControls(): void {
   chartLegendEl.classList.toggle("per-model", viewMode === "per-model");
 
   // Color model labels in per-model mode so they serve as a legend
-  const checkboxMap: Array<[HTMLInputElement, ModelId]> = [
-    [modelGefsCheckbox, "NOAA GEFS"],
-    [modelHrrrCheckbox, "NOAA HRRR"],
-    [modelEcmwfCheckbox, "ECMWF IFS ENS"],
-    [modelAifsCheckbox, "ECMWF AIFS"],
-  ];
-  for (const [checkbox, model] of checkboxMap) {
+  for (const [checkbox, model] of checkboxes) {
     const labelSpan = checkbox.parentElement?.querySelector("span");
     if (labelSpan) {
       labelSpan.style.color = viewMode === "per-model" ? MODEL_COLORS[model] : "";
@@ -554,25 +544,96 @@ function syncModelControls(): void {
   equalBlendBtn.classList.toggle("active", !magic);
 
   // Dim blend toggle when only one model is selected (still clickable)
-  const enabledCount = [...enabled].filter((m) => m !== "NOAA HRRR" || hrrrAvailable).length;
+  const enabledCount = [...enabled].filter((m) => !unavailableModels.has(m)).length;
   const blendInactive = enabledCount <= 1;
   magicBlendBtn.classList.toggle("inactive", blendInactive);
   equalBlendBtn.classList.toggle("inactive", blendInactive);
 }
 
+/** One model's data for the current location, ready to fetch variables */
+interface ModelSource {
+  model: ModelId;
+  isEnsemble: boolean;
+  /** ISO init time of the run being fetched */
+  initTime: string;
+  fetchVariable: (variable: ForecastVariable) => Promise<ForecastPoint[]>;
+}
+
 /**
- * Fetch the most recent init_time across both GEFS and HRRR stores.
- * GEFS 35-day product updates daily (00Z), HRRR updates every 6 hours,
- * so HRRR will typically have the most recent init_time.
+ * Open every model's store for `location`, in blend order. Each model is
+ * independent: one whose store fails, or that doesn't cover the location
+ * (HRRR outside CONUS), is left out rather than failing the others.
  */
-async function fetchLatestAnyInitTime(): Promise<string> {
-  const [gefsInit, hrrrInit, ecmwfInit, aifsInit] = await Promise.all([
-    fetchLatestInitTime(),
-    fetchLatestHrrrInitTime().catch(() => ""),
-    fetchLatestEcmwfInitTime().catch(() => ""),
-    fetchLatestAifsInitTime().catch(() => ""),
+async function openModelSources(location: LatLon): Promise<ModelSource[]> {
+  const [gefs, ecmwf, aifs, hrrr] = await Promise.all([
+    fetchGefsMetadata(location).catch(() => null),
+    fetchEcmwfMetadata(location).catch(() => null),
+    fetchAifsMetadata(location).catch(() => null),
+    fetchHrrrMetadata(location).catch(() => null),
   ]);
-  return [gefsInit, hrrrInit, ecmwfInit, aifsInit].reduce((a, b) => (b > a ? b : a));
+  const sources: ModelSource[] = [];
+  if (gefs) {
+    sources.push({
+      model: "NOAA GEFS",
+      isEnsemble: true,
+      initTime: gefs.initTime.toISOString(),
+      fetchVariable: (v) => fetchGefsVariable(gefs, v),
+    });
+  }
+  if (ecmwf) {
+    sources.push({
+      model: "ECMWF IFS ENS",
+      isEnsemble: true,
+      initTime: ecmwf.initTime.toISOString(),
+      fetchVariable: (v) => fetchEcmwfVariable(ecmwf, v),
+    });
+  }
+  if (aifs) {
+    sources.push({
+      model: "ECMWF AIFS",
+      isEnsemble: true,
+      initTime: aifs.initTime.toISOString(),
+      fetchVariable: (v) => fetchAifsVariable(aifs, v),
+    });
+  }
+  if (hrrr) {
+    sources.push({
+      model: "NOAA HRRR",
+      isEnsemble: false,
+      initTime: hrrr.initTime.toISOString(),
+      fetchVariable: (v) => fetchHrrrVariable(hrrr, v),
+    });
+  }
+  return sources;
+}
+
+/** Models with data in any variable of `inputs` */
+function modelsWithData(inputs: Map<ForecastVariable, ModelVariableInput[]>): Set<ModelId> {
+  const models = new Set<ModelId>();
+  for (const varInputs of inputs.values()) {
+    for (const input of varInputs) models.add(input.model);
+  }
+  return models;
+}
+
+const LATEST_INIT_TIME_FETCHERS: Record<ModelId, () => Promise<string>> = {
+  "NOAA GEFS": fetchLatestInitTime,
+  "NOAA HRRR": fetchLatestHrrrInitTime,
+  "ECMWF IFS ENS": fetchLatestEcmwfInitTime,
+  "ECMWF AIFS": fetchLatestAifsInitTime,
+};
+
+/**
+ * Fetch the most recent init_time across the stores of `models`. Only the
+ * models the forecast is built from count: HRRR publishes hourly, so
+ * counting it outside its coverage would make every forecast look stale.
+ * Stores that can't be reached are ignored; returns "" if none can be.
+ */
+async function fetchLatestAnyInitTime(models: ModelId[]): Promise<string> {
+  const initTimes = await Promise.all(
+    models.map((m) => LATEST_INIT_TIME_FETCHERS[m]().catch(() => "")),
+  );
+  return initTimes.reduce((a, b) => (b > a ? b : a), "");
 }
 
 async function checkForNewerForecast(
@@ -582,7 +643,7 @@ async function checkForNewerForecast(
   loadId: number,
 ): Promise<void> {
   try {
-    const latestInitTime = await fetchLatestAnyInitTime();
+    const latestInitTime = await fetchLatestAnyInitTime(availableModels());
     if (loadId !== currentLoadId) return;
     const isNewer = latestInitTime > knownInitTime;
     if (!forceRefetch && !isNewer) return;
@@ -591,38 +652,47 @@ async function checkForNewerForecast(
       updatingIndicator.classList.remove("hidden");
     }
 
-    const [gefsForecast, hrrrForecast, ecmwfForecast, aifsForecast] = await Promise.all([
-      fetchGefsForecast(location),
-      fetchHrrrForecast(location),
-      fetchEcmwfForecast(location),
-      fetchAifsForecast(location),
-    ]);
+    const sources = await openModelSources(location);
+    const newCache = new Map<ForecastVariable, ModelVariableInput[]>();
+    await Promise.all(
+      BLEND_VARIABLES.map(async (varKey) => {
+        const inputs = await Promise.all(
+          sources.map(async (src): Promise<ModelVariableInput | null> => {
+            const points = await src.fetchVariable(varKey).catch(() => null);
+            if (!points) return null;
+            return { model: src.model, points, isEnsemble: src.isEnsemble, initTime: src.initTime };
+          }),
+        );
+        newCache.set(
+          varKey,
+          inputs.filter((i) => i !== null),
+        );
+      }),
+    );
     // Bail if a newer load has started. Don't touch the indicator here —
     // a concurrent newer load may have already taken ownership of it.
     if (loadId !== currentLoadId) return;
 
-    // Update cached per-model inputs
-    hrrrAvailable = hrrrForecast !== null;
-    const modelForecasts = [gefsForecast, ecmwfForecast, aifsForecast];
-    if (hrrrForecast) modelForecasts.push(hrrrForecast);
-
-    const newCache = new Map<ForecastVariable, ModelVariableInput[]>();
+    // Keep what we already have for any model whose refresh failed
+    const previous = cachedLocation === location ? cachedModelInputs : null;
     for (const varKey of BLEND_VARIABLES) {
-      const inputs: ModelVariableInput[] = modelForecasts.map((f) => ({
-        model: f.model,
-        points: f[varKey] ?? [],
-        isEnsemble: f.isEnsemble,
-      }));
-      newCache.set(varKey, inputs);
+      const inputs = newCache.get(varKey)!;
+      for (const old of previous?.get(varKey) ?? []) {
+        if (!inputs.some((i) => i.model === old.model)) inputs.push(old);
+      }
+      inputs.sort((a, b) => ALL_MODELS.indexOf(a.model) - ALL_MODELS.indexOf(b.model));
     }
+    const withData = modelsWithData(newCache);
+    if (withData.size === 0) throw new Error("No forecast data could be refreshed");
 
-    const latestInit = modelForecasts.reduce(
-      (latest, f) => (f.initTime > latest ? f.initTime : latest),
-      modelForecasts[0]!.initTime,
-    );
+    const latestInit = [...newCache.values()]
+      .flat()
+      .map((i) => i.initTime ?? "")
+      .reduce((a, b) => (b > a ? b : a), knownInitTime);
     cachedModelInputs = newCache;
     cachedLocation = location;
     cachedInitTime = latestInit;
+    unavailableModels = new Set(ALL_MODELS.filter((m) => !withData.has(m)));
     updateCachedTimeRange(newCache);
 
     if (isNewer) {
@@ -640,8 +710,8 @@ async function checkForNewerForecast(
         location.latitude,
         location.longitude,
         lastForecast,
-        cachedModelInputs ?? undefined,
-        hrrrAvailable,
+        cachedModelInputs,
+        unavailableModels,
       );
     }
   } catch {
@@ -737,8 +807,14 @@ function updateBlendWeightsDisplay(): void {
 
   const grid = loadAccuracyGrid();
   const accuracy = lookupAccuracy(cachedLocation, grid);
-  const models: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS"];
-  if (hrrrAvailable) models.push("NOAA HRRR");
+  // The models actually in the temperature blend
+  const models = selectInputs(cachedModelInputs.get("temperature") ?? [], getEnabledModels()).map(
+    (i) => i.model,
+  );
+  if (models.length === 0) {
+    blendWeightsInfo.textContent = "";
+    return;
+  }
 
   // Show weights for temperature at lead time 0 (representative)
   const weights = computeWeights(models, "temperature_2m", 0, accuracy);
@@ -766,36 +842,23 @@ async function loadForecast(location: LatLon): Promise<void> {
   updatingIndicator.classList.add("hidden");
 
   try {
-    // Check cache first — if valid, render immediately without skeletons
+    // A cached forecast renders straight away; a background refresh then
+    // replaces it (showing "Updating forecast…" if a newer run is out)
     const cached = getCached(location.latitude, location.longitude);
-    let useCache = false;
     if (cached) {
-      showLoading();
-      try {
-        const latestInitTime = await fetchLatestAnyInitTime();
-        if (loadId !== currentLoadId) return;
-        useCache = latestInitTime <= cached.forecast.initTime;
-      } catch {
-        if (loadId !== currentLoadId) return;
-        useCache = true;
-      }
-    }
-
-    if (useCache && cached) {
       hideLoadProgress();
       lastForecast = cached.forecast;
       cachedLocation = location;
       cachedInitTime = cached.forecast.initTime;
-
-      // Restore per-model inputs so controls work immediately
-      if (cached.modelInputs) {
-        cachedModelInputs = cached.modelInputs;
-        hrrrAvailable = cached.hrrrAvailable;
-        updateCachedTimeRange(cachedModelInputs);
-      }
+      // Entries from before per-model inputs were cached can't be
+      // reblended; don't leave the previous location's inputs behind
+      cachedModelInputs = cached.modelInputs;
+      unavailableModels = new Set(cached.unavailableModels);
+      if (cachedModelInputs) updateCachedTimeRange(cachedModelInputs);
 
       initTimeLabel.textContent = formatInitTime(cached.forecast.initTime);
       renderAberrations(detectAberrations(cached.forecast, getUnitSystem(), cachedTimeRange));
+      forecastMetaBar.classList.remove("hidden");
       showForecast();
       modelControlsEl.classList.remove("hidden");
       syncModelControls();
@@ -805,31 +868,25 @@ async function loadForecast(location: LatLon): Promise<void> {
       return;
     }
 
-    // No cache — show skeleton charts and progressively load data
+    // No cache — show skeleton charts and progressively load data. Drop the
+    // previous location's data first so a failed load can't leave model
+    // toggles or the back button showing it under this location's label.
+    lastForecast = null;
+    cachedModelInputs = null;
+    cachedLocation = null;
     showSkeletonCharts();
 
-    // Fetch metadata for all models in parallel
-    const [gefsMeta, hrrrMeta, ecmwfMeta, aifsMeta] = await Promise.all([
-      fetchGefsMetadata(location),
-      fetchHrrrMetadata(location),
-      fetchEcmwfMetadata(location),
-      fetchAifsMetadata(location),
-    ]);
+    const sources = await openModelSources(location);
     if (loadId !== currentLoadId) return;
+    if (sources.length === 0) throw new Error("No forecast data source could be reached");
 
     // Show init time as soon as metadata is available
-    const initTimes = [
-      gefsMeta.initTime.toISOString(),
-      hrrrMeta?.initTime.toISOString() ?? "",
-      ecmwfMeta.initTime.toISOString(),
-      aifsMeta.initTime.toISOString(),
-    ];
-    const latestInitTime = initTimes.reduce((a, b) => (b > a ? b : a));
+    const latestInitTime = sources.map((src) => src.initTime).reduce((a, b) => (b > a ? b : a));
     initTimeLabel.textContent = formatInitTime(latestInitTime);
 
-    // Track HRRR availability and update model controls
-    hrrrAvailable = hrrrMeta !== null;
-    if (!hrrrMeta) markModelUnavailable("NOAA HRRR");
+    // Track model availability and update model controls
+    unavailableModels = new Set(ALL_MODELS.filter((m) => !sources.some((src) => src.model === m)));
+    for (const m of unavailableModels) markModelUnavailable(m);
     syncModelControls();
     modelControlsEl.classList.remove("hidden");
 
@@ -840,138 +897,94 @@ async function loadForecast(location: LatLon): Promise<void> {
     cachedInitTime = latestInitTime;
     cachedTimeRange = undefined;
 
-    // Kick off all variable fetches + recent weather in parallel
     const grid = loadAccuracyGrid();
     const enabledModels = getEnabledModels();
     const useMagic = getMagicBlend();
-    const results: Partial<Record<ForecastVariable, import("./types.js").ForecastPoint[]>> = {};
+    const results: Partial<Record<ForecastVariable, ForecastPoint[]>> = {};
 
-    const variablePromises = GRID_VARIABLES.map(async (variable) => {
-      const modelFetches: Array<{
-        model: ModelId;
-        isEnsemble: boolean;
-        fetch: Promise<import("./types.js").ForecastPoint[] | null>;
-      }> = [
-        { model: "NOAA GEFS", isEnsemble: true, fetch: fetchGefsVariable(gefsMeta, variable) },
-        {
-          model: "ECMWF IFS ENS",
-          isEnsemble: true,
-          fetch: fetchEcmwfVariable(ecmwfMeta, variable),
-        },
-        { model: "ECMWF AIFS", isEnsemble: true, fetch: fetchAifsVariable(aifsMeta, variable) },
-      ];
-      if (hrrrMeta) {
-        modelFetches.push({
-          model: "NOAA HRRR",
-          isEnsemble: false,
-          fetch: fetchHrrrVariable(hrrrMeta, variable),
-        });
-      }
+    // Fetch every variable from every model in parallel. Charted variables
+    // render as soon as the first model's data arrives, then re-blend and
+    // re-render as each remaining model lands. Dew point has no chart of
+    // its own — it feeds the temperature chart's feels-like/overlay and the
+    // humidity aberration — so it neither renders nor counts toward the
+    // progress chips.
+    await Promise.all(
+      BLEND_VARIABLES.map(async (variable) => {
+        const arrived = new Map<ModelId, ModelVariableInput>();
+        let skeletonGone: Promise<void> | null = null;
 
-      // Keep a fixed model order regardless of arrival order so blending
-      // stays deterministic and matches later reblends
-      const slotOrder: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS", "NOAA HRRR"];
-      const arrived = new Map<ModelId, ModelVariableInput>();
-      const canvas = document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement;
-      let skeletonGone: Promise<void> | null = null;
-
-      // Render the chart as soon as the first model's data arrives, then
-      // re-blend and re-render as each remaining model lands
-      await Promise.all(
-        modelFetches.map(async (mf) => {
-          const points = await mf.fetch;
-          if (loadId !== currentLoadId) return;
-
-          if (points) {
-            arrived.set(mf.model, { model: mf.model, points, isEnsemble: mf.isEnsemble });
-            // Cache incrementally so controls work on already-loaded
-            // variables while others are still fetching
-            const inputs = slotOrder.filter((m) => arrived.has(m)).map((m) => arrived.get(m)!);
-            cachedModelInputs!.set(variable, inputs);
-            updateCachedTimeRange(cachedModelInputs!);
-
-            const filtered = inputs.filter((i) => enabledModels.has(i.model));
-            const toBlend = filtered.length > 0 ? filtered : inputs;
-            const blended = blendSingleVariable(variable, toBlend, location, grid, useMagic);
-            results[variable] = blended;
-
-            skeletonGone ??= stopChartSkeleton(canvas);
-            await skeletonGone;
+        await Promise.all(
+          sources.map(async (src) => {
+            // One model failing one variable must not abort the whole load
+            const points = await src.fetchVariable(variable).catch(() => null);
             if (loadId !== currentLoadId) return;
-            renderVariableChart(variable, blended);
-          }
-          markModelVariableLoaded(mf.model);
-        }),
-      );
-    });
 
-    // Dew point loads alongside the grid variables but has no chart of its
-    // own — it feeds the temperature chart's feels-like/overlay and the
-    // humidity aberration. Fetch it per model and blend without touching the
-    // progress chips or rendering a chart.
-    const dewPointPromise = (async () => {
-      const dpFetches: Array<{
-        model: ModelId;
-        isEnsemble: boolean;
-        fetch: Promise<import("./types.js").ForecastPoint[] | null>;
-      }> = [
-        { model: "NOAA GEFS", isEnsemble: true, fetch: fetchGefsVariable(gefsMeta, "dewPoint") },
-        {
-          model: "ECMWF IFS ENS",
-          isEnsemble: true,
-          fetch: fetchEcmwfVariable(ecmwfMeta, "dewPoint"),
-        },
-        { model: "ECMWF AIFS", isEnsemble: true, fetch: fetchAifsVariable(aifsMeta, "dewPoint") },
-      ];
-      if (hrrrMeta) {
-        dpFetches.push({
-          model: "NOAA HRRR",
-          isEnsemble: false,
-          fetch: fetchHrrrVariable(hrrrMeta, "dewPoint"),
-        });
-      }
-      const slotOrder: ModelId[] = ["NOAA GEFS", "ECMWF IFS ENS", "ECMWF AIFS", "NOAA HRRR"];
-      const arrived = new Map<ModelId, ModelVariableInput>();
-      await Promise.all(
-        dpFetches.map(async (mf) => {
-          // Dew point is optional and has no chart of its own — a failed
-          // fetch for one model must not abort the whole forecast load, so
-          // swallow the error and simply skip that model's dew point.
-          const points = await mf.fetch.catch(() => null);
-          if (loadId !== currentLoadId || !points) return;
-          arrived.set(mf.model, { model: mf.model, points, isEnsemble: mf.isEnsemble });
-          const inputs = slotOrder.filter((m) => arrived.has(m)).map((m) => arrived.get(m)!);
-          cachedModelInputs!.set("dewPoint", inputs);
-          const filtered = inputs.filter((i) => enabledModels.has(i.model));
-          const toBlend = filtered.length > 0 ? filtered : inputs;
-          results.dewPoint = blendSingleVariable("dewPoint", toBlend, location, grid, useMagic);
-        }),
-      );
-    })();
+            if (points) {
+              arrived.set(src.model, {
+                model: src.model,
+                points,
+                isEnsemble: src.isEnsemble,
+                initTime: src.initTime,
+              });
+              // Keep a fixed model order regardless of arrival order so
+              // blending stays deterministic and matches later reblends.
+              // Cache incrementally so controls work on already-loaded
+              // variables while others are still fetching.
+              const inputs = ALL_MODELS.filter((m) => arrived.has(m)).map((m) => arrived.get(m)!);
+              cachedModelInputs!.set(variable, inputs);
+              updateCachedTimeRange(cachedModelInputs!);
 
-    await Promise.all([...variablePromises, dewPointPromise]);
+              const toBlend = selectInputs(inputs, enabledModels);
+              const blended = blendSingleVariable(variable, toBlend, location, grid, useMagic);
+              results[variable] = blended;
+
+              if (variable !== "dewPoint") {
+                const canvas = document.getElementById(
+                  VARIABLE_CANVAS[variable],
+                ) as HTMLCanvasElement;
+                skeletonGone ??= stopChartSkeleton(canvas);
+                await skeletonGone;
+                if (loadId !== currentLoadId) return;
+                renderVariableChart(variable, blended);
+                // Only counted on success: a failed fetch leaves the chip
+                // pending rather than marking it "done"
+                markModelVariableLoaded(src.model);
+              }
+            }
+          }),
+        );
+      }),
+    );
     if (loadId !== currentLoadId) return;
     hideLoadProgress();
+
+    if (GRID_VARIABLES.every((v) => !results[v])) {
+      throw new Error("No forecast data could be loaded");
+    }
+    // A variable no model delivered keeps an empty chart, not a skeleton
+    for (const v of GRID_VARIABLES) {
+      if (!results[v]) {
+        void stopChartSkeleton(document.getElementById(VARIABLE_CANVAS[v]) as HTMLCanvasElement);
+      }
+    }
+    // Models whose store opened but delivered no variables are unavailable too
+    const withData = modelsWithData(cachedModelInputs);
+    unavailableModels = new Set(ALL_MODELS.filter((m) => !withData.has(m)));
+    syncModelControls();
 
     // Build complete ForecastData
     const forecast: ForecastData = {
       location,
       initTime: latestInitTime,
-      temperature: results.temperature!,
-      precipitation: results.precipitation!,
-      windSpeed: results.windSpeed!,
-      cloudCover: results.cloudCover!,
+      temperature: results.temperature ?? [],
+      precipitation: results.precipitation ?? [],
+      windSpeed: results.windSpeed ?? [],
+      cloudCover: results.cloudCover ?? [],
       dewPoint: results.dewPoint ?? [],
     };
 
     lastForecast = forecast;
-    setCache(
-      location.latitude,
-      location.longitude,
-      forecast,
-      cachedModelInputs ?? undefined,
-      hrrrAvailable,
-    );
+    setCache(location.latitude, location.longitude, forecast, cachedModelInputs, unavailableModels);
 
     // Re-render everything now that all data is in: rainbow markers need
     // precipitation and cloud cover together, the per-variable renders
@@ -990,6 +1003,14 @@ async function loadForecast(location: LatLon): Promise<void> {
     showError(`Failed to load forecast: ${message}`);
   }
 }
+
+/**
+ * Monotonic id for each location request (geolocation, ZIP lookup, or URL
+ * restore). Resolving a location is async and `loadForecast` only guards
+ * what happens after it starts, so a slow ZIP lookup could otherwise land
+ * after a newer choice and replace it.
+ */
+let currentLocationRequestId = 0;
 
 /** Update the URL to reflect the current location selection (zip, coords, or none). */
 function setUrlLocation(params: import("./url-params.js").LocationParam | null): void {
@@ -1012,6 +1033,7 @@ function showLocationSelectionWithBack(): void {
 // Location reset/back button handlers
 locationResetBtn.addEventListener("click", () => {
   // Show location selection, hide forecast, show back button if there was data
+  ++currentLocationRequestId;
   forecastEl.classList.add("hidden");
   forecastMetaBar.classList.add("hidden");
   modelControlsEl.classList.add("hidden");
@@ -1026,7 +1048,9 @@ locationResetBtn.addEventListener("click", () => {
 });
 
 locationBackBtn.addEventListener("click", () => {
-  // Go back to previously selected location's forecast
+  // Go back to previously selected location's forecast, abandoning any
+  // location lookup still in flight so it can't replace that forecast
+  ++currentLocationRequestId;
   showLocationDisplay();
   forecastMetaBar.classList.remove("hidden");
   if (lastForecast) {
@@ -1039,12 +1063,14 @@ locationBackBtn.addEventListener("click", () => {
 geolocateBtn.addEventListener("click", async () => {
   // Clear any stale prior selection up-front so a denied/cancelled
   // geolocation prompt doesn't leave a previous ?zip=/?lat= in the URL.
+  const requestId = ++currentLocationRequestId;
   lastZip = null;
   zipInput.value = "";
   setUrlLocation(null);
   showLoading();
   try {
     const location = await getGeolocation();
+    if (requestId !== currentLocationRequestId) return;
     setUrlLocation({
       type: "coords",
       latitude: location.latitude,
@@ -1052,6 +1078,7 @@ geolocateBtn.addEventListener("click", async () => {
     });
     await loadForecast(location);
   } catch (err) {
+    if (requestId !== currentLocationRequestId) return;
     const message = err instanceof Error ? err.message : "Could not get location";
     showError(message);
   }
@@ -1060,6 +1087,7 @@ geolocateBtn.addEventListener("click", async () => {
 zipForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const zip = zipInput.value.trim();
+  const requestId = ++currentLocationRequestId;
   // Clear any stale prior selection up-front (same rationale as the
   // geolocate handler).
   setUrlLocation(null);
@@ -1067,9 +1095,11 @@ zipForm.addEventListener("submit", async (e) => {
   try {
     lastZip = zip;
     const location = await zipToLatLon(zip);
+    if (requestId !== currentLocationRequestId) return;
     setUrlLocation({ type: "zip", zip });
     await loadForecast(location);
   } catch (err) {
+    if (requestId !== currentLocationRequestId) return;
     const message = err instanceof Error ? err.message : "Invalid ZIP code";
     showError(message);
   }
@@ -1202,8 +1232,7 @@ modelAifsCheckbox.addEventListener("change", () =>
 
 // Select-all glyph: re-enable all available models
 selectAllModels.addEventListener("click", () => {
-  const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
-  const enabled = new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable));
+  const enabled = new Set<ModelId>(availableModels());
   setEnabledModels(enabled);
   syncModelControls();
   reblendAndRender();
@@ -1229,8 +1258,7 @@ function setupLongPress(label: HTMLElement, model: ModelId): void {
       const current = getEnabledModels();
       if (current.size === 1 && current.has(model)) {
         // Already isolated on this model — restore all sources
-        const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
-        setEnabledModels(new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable)));
+        setEnabledModels(new Set<ModelId>(availableModels()));
       } else {
         setEnabledModels(new Set<ModelId>([model]));
       }
@@ -1283,12 +1311,9 @@ perModelViewBtn.addEventListener("click", toggleViewMode);
 // Blend toggle — either button flips between magic / equal.
 // When only one model is selected, first click enables all sources.
 function toggleBlendMode(): void {
-  const enabledCount = [...getEnabledModels()].filter(
-    (m) => m !== "NOAA HRRR" || hrrrAvailable,
-  ).length;
+  const enabledCount = [...getEnabledModels()].filter((m) => !unavailableModels.has(m)).length;
   if (enabledCount <= 1) {
-    const all: ModelId[] = ["NOAA GEFS", "NOAA HRRR", "ECMWF IFS ENS", "ECMWF AIFS"];
-    setEnabledModels(new Set<ModelId>(all.filter((m) => m !== "NOAA HRRR" || hrrrAvailable)));
+    setEnabledModels(new Set<ModelId>(availableModels()));
   } else {
     setMagicBlend(!getMagicBlend());
   }
@@ -1301,16 +1326,21 @@ equalBlendBtn.addEventListener("click", toggleBlendMode);
 // On load: restore the location from URL params if present.
 const initialLocation = getLocationFromUrl(window.location.href);
 if (initialLocation?.type === "zip") {
+  const requestId = ++currentLocationRequestId;
   lastZip = initialLocation.zip;
   zipInput.value = initialLocation.zip;
   zipToLatLon(initialLocation.zip).then(
-    (location) => loadForecast(location),
+    (location) => {
+      if (requestId === currentLocationRequestId) return loadForecast(location);
+    },
     (err) => {
+      if (requestId !== currentLocationRequestId) return;
       const message = err instanceof Error ? err.message : "Invalid ZIP code";
       showError(message);
     },
   );
 } else if (initialLocation?.type === "coords") {
+  ++currentLocationRequestId;
   lastZip = null;
   zipInput.value = "";
   loadForecast({

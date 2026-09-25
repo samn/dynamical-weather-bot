@@ -1,4 +1,4 @@
-import type { ForecastData, ForecastVariable } from "./types.js";
+import type { ForecastData, ForecastVariable, ModelId } from "./types.js";
 import type { ModelVariableInput } from "./blend.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -12,6 +12,9 @@ interface CacheEntry {
   forecast: ForecastData;
   /** Per-model inputs for each variable, enabling immediate reblending */
   modelInputs?: SerializedModelInputs;
+  /** Models with no data for this location (outside coverage or failed) */
+  unavailableModels?: ModelId[];
+  /** Legacy field from before any model but HRRR could be unavailable */
   hrrrAvailable?: boolean;
 }
 
@@ -44,7 +47,7 @@ function writeStore(store: CacheStore): void {
 export interface CachedData {
   forecast: ForecastData;
   modelInputs: Map<ForecastVariable, ModelVariableInput[]> | null;
-  hrrrAvailable: boolean;
+  unavailableModels: ModelId[];
 }
 
 export function getCached(lat: number, lon: number): CachedData | null {
@@ -67,7 +70,8 @@ export function getCached(lat: number, lon: number): CachedData | null {
   return {
     forecast: entry.forecast,
     modelInputs,
-    hrrrAvailable: entry.hrrrAvailable ?? true,
+    unavailableModels:
+      entry.unavailableModels ?? (entry.hrrrAvailable === false ? ["NOAA HRRR"] : []),
   };
 }
 
@@ -76,7 +80,7 @@ export function setCache(
   lon: number,
   forecast: ForecastData,
   modelInputs?: Map<ForecastVariable, ModelVariableInput[]>,
-  hrrrAvailable?: boolean,
+  unavailableModels?: Iterable<ModelId>,
 ): void {
   const store = readStore();
   // Evict expired entries
@@ -97,7 +101,7 @@ export function setCache(
     timestamp: now,
     forecast,
     modelInputs: serializedInputs,
-    hrrrAvailable,
+    unavailableModels: unavailableModels ? [...unavailableModels] : undefined,
   };
   writeStore(store);
 }

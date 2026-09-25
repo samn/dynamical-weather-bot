@@ -1,3 +1,6 @@
+/** Hours past "now" the app forecasts (and fetches enough lead times to cover) */
+export const FORECAST_HORIZON_HOURS = 72;
+
 /** Geographic coordinates */
 export interface LatLon {
   latitude: number;

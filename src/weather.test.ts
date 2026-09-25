@@ -7,6 +7,8 @@ import {
   latToIndex,
   lonToIndex,
   findLatestInitIndex,
+  stepsToHorizon,
+  toForecastPoints,
 } from "./weather.js";
 
 describe("percentile", () => {
@@ -133,6 +135,11 @@ describe("lonToIndex", () => {
     expect(lonToIndex(179.75)).toBe(1439);
   });
 
+  it("wraps longitudes nearer 180 than 179.75 to index 0", () => {
+    expect(lonToIndex(179.9)).toBe(0);
+    expect(lonToIndex(-179.9)).toBe(0);
+  });
+
   it("maps -122.4 (San Francisco) to correct index", () => {
     // (-122.4 + 180) / 0.25 = 57.6 / 0.25 = 230.4 -> rounds to 230
     expect(lonToIndex(-122.4)).toBe(230);
@@ -171,5 +178,44 @@ describe("findLatestInitIndex", () => {
   it("handles a single-element array", () => {
     expect(findLatestInitIndex([1000], 0)).toBe(0);
     expect(findLatestInitIndex([1000], 2_000_000)).toBe(0);
+  });
+});
+
+describe("stepsToHorizon", () => {
+  const init = new Date("2026-06-10T00:00:00Z");
+  const threeHourly = Array.from({ length: 60 }, (_, i) => i * 3);
+
+  it("covers the horizon past now, not past init", () => {
+    // 14h after a 00Z init, 72h ahead is lead 86h → first lead ≥ 86 is 87 (index 29)
+    const now = init.getTime() + 14 * 3600 * 1000;
+    expect(stepsToHorizon(threeHourly, init, now)).toBe(30);
+  });
+
+  it("includes a lead time exactly at the horizon", () => {
+    expect(stepsToHorizon(threeHourly, init, init.getTime())).toBe(25);
+  });
+
+  it("returns every lead time when none reaches the horizon", () => {
+    expect(stepsToHorizon([0, 1, 2], init, init.getTime())).toBe(3);
+  });
+});
+
+describe("toForecastPoints", () => {
+  it("skips timesteps where no member has data instead of reporting 0", () => {
+    const init = new Date("2026-06-10T00:00:00Z");
+    const points = toForecastPoints(
+      [
+        [NaN, 1, 2],
+        [NaN, 3, NaN],
+      ],
+      [0, 3, 6],
+      init,
+    );
+    expect(points.map((p) => p.time)).toEqual([
+      "2026-06-10T03:00:00.000Z",
+      "2026-06-10T06:00:00.000Z",
+    ]);
+    expect(points[0]!.median).toBe(2);
+    expect(points[1]!.median).toBe(2);
   });
 });

@@ -122,6 +122,29 @@ test.describe("page load and initial state", () => {
 
   });
 
+  test("still starts when the browser blocks site data", async ({ page }) => {
+    // Browsers with site data blocked throw on any localStorage access;
+    // preferences are read at startup, so this used to kill the whole app
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "localStorage", {
+        get() {
+          throw new DOMException("The operation is insecure.", "SecurityError");
+        },
+      });
+    });
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(err.message));
+    await page.goto("/");
+
+    // The app's event handlers are wired up: a valid ZIP auto-submits and
+    // the app moves on from the location prompt
+    await page.fill("#zip-input", "10001");
+    await expect(page.locator("#forecast-meta-bar")).not.toHaveClass(/hidden/);
+    expect(errors).toEqual([]);
+  });
+
   test("loading, error, and forecast sections are hidden initially", async ({ page }) => {
     await blockZarrRequests(page);
     await page.goto("/");
@@ -346,6 +369,43 @@ test.describe("current location URL encoding", () => {
     await expect.poll(() => page.url()).toContain("zip=10001");
     expect(page.url()).not.toContain("lat=");
     expect(page.url()).not.toContain("lon=");
+
+    await context.close();
+  });
+
+  test("a slow ZIP lookup doesn't override a newer geolocation", async ({ browser }) => {
+    const context = await browser.newContext({
+      permissions: ["geolocation"],
+      geolocation: { latitude: 37.7749, longitude: -122.4194 },
+    });
+    const page = await context.newPage();
+    await blockZarrRequests(page);
+    let releaseZip: () => void = () => {};
+    const zipHeld = new Promise<void>((resolve) => {
+      releaseZip = resolve;
+    });
+    await page.route("**/api.zippopotam.us/**", async (route) => {
+      await zipHeld;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ places: [{ latitude: "40.7484", longitude: "-73.9967" }] }),
+      });
+    });
+    await page.goto("/");
+
+    // Start a ZIP lookup that stalls, then pick the current location
+    await page.fill("#zip-input", "10001");
+    await page.click("#geolocate-btn");
+    await expect.poll(() => page.url()).toContain("lat=37.7749");
+    await expect(page.locator("#location-label")).toContainText("37.77");
+
+    // The stale ZIP lookup finally resolves — and is ignored
+    releaseZip();
+    await page.waitForTimeout(500);
+    expect(page.url()).toContain("lat=37.7749");
+    expect(page.url()).not.toContain("zip=");
+    await expect(page.locator("#location-label")).toContainText("37.77");
 
     await context.close();
   });

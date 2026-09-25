@@ -1,5 +1,5 @@
 import type { ForecastPoint } from "./types.js";
-import { heatIndex, indexByHour, relativeHumidityFromDewPoint } from "./humidity.js";
+import { heatIndex, indexByTime, relativeHumidityFromDewPoint } from "./humidity.js";
 
 /**
  * Wet-bulb temperature (°C) from air temperature (°C) and relative humidity
@@ -203,7 +203,7 @@ export interface HeatPoint {
  * Build a heat-metric series aligned to the temperature series.
  *
  * Both metrics need humidity, so timesteps without a matching dew point
- * (matched by rounded hoursFromNow, as in `computeFeelsLike`) are dropped.
+ * (matched by valid time, as in `computeFeelsLike`) are dropped.
  *
  * The p90 variants raise the air temperature to the 90th percentile while
  * holding the dew point at its median — that is the physically consistent
@@ -218,11 +218,11 @@ export function computeHeatSeries(
   dewPoint: ForecastPoint[] | undefined,
 ): HeatPoint[] {
   if (!dewPoint || dewPoint.length === 0) return [];
-  const dewByHour = indexByHour(dewPoint);
+  const dewByTime = indexByTime(dewPoint);
 
   const points: HeatPoint[] = [];
   for (const t of temperature) {
-    const dp = dewByHour.get(Math.round(t.hoursFromNow));
+    const dp = dewByTime.get(Date.parse(t.time));
     if (!dp) continue;
     const rh = relativeHumidityFromDewPoint(t.median, dp.median);
     const rhP90 = relativeHumidityFromDewPoint(t.p90, dp.median);

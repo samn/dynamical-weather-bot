@@ -1,7 +1,7 @@
 import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
 import proj4 from "proj4";
-import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
+import type { LatLon, ForecastPoint, ForecastVariable } from "./types.js";
 import {
   windSpeed,
   precipToMmHr,
@@ -126,13 +126,23 @@ export async function fetchHrrrMetadata(location: LatLon): Promise<HrrrMetadata 
   };
 }
 
-/** Convert raw values to ForecastPoints (deterministic — all percentiles equal the value) */
-function toPoints(values: number[], leadTimeHours: number[], initTime: Date): ForecastPoint[] {
+/**
+ * Convert raw values to ForecastPoints (deterministic — all percentiles equal
+ * the value). Missing (non-finite) values are omitted, e.g. precipitation at
+ * lead 0, so they can't propagate NaN into the blend. Exported for testing.
+ */
+export function toPoints(
+  values: number[],
+  leadTimeHours: number[],
+  initTime: Date,
+): ForecastPoint[] {
   const now = Date.now();
-  return values.map((val, t) => {
+  const points: ForecastPoint[] = [];
+  values.forEach((val, t) => {
+    if (!isFinite(val)) return;
     const hours = leadTimeHours[t] ?? t;
     const time = new Date(initTime.getTime() + hours * 3600 * 1000);
-    return {
+    points.push({
       time: time.toISOString(),
       hoursFromNow: (time.getTime() - now) / 3600000,
       median: val,
@@ -140,8 +150,9 @@ function toPoints(values: number[], leadTimeHours: number[], initTime: Date): Fo
       p90: val,
       min: val,
       max: val,
-    };
+    });
   });
+  return points;
 }
 
 /** Fetch a single variable from the HRRR store */
@@ -190,33 +201,4 @@ export async function fetchHrrrVariable(
   // cloudCover
   const data = await fetchHrrrVar(meta, "total_cloud_cover_atmosphere");
   return toPoints(data.map(cloudCoverToFraction), leadTimeHours, initTime);
-}
-
-/**
- * Fetch HRRR forecast data for a location.
- * Returns null if the location is outside CONUS (HRRR coverage area).
- */
-export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast | null> {
-  const meta = await fetchHrrrMetadata(location);
-  if (!meta) return null;
-
-  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
-    fetchHrrrVariable(meta, "temperature"),
-    fetchHrrrVariable(meta, "precipitation"),
-    fetchHrrrVariable(meta, "windSpeed"),
-    fetchHrrrVariable(meta, "cloudCover"),
-    fetchHrrrVariable(meta, "dewPoint"),
-  ]);
-
-  return {
-    model: "NOAA HRRR",
-    isEnsemble: false,
-    location,
-    initTime: meta.initTime.toISOString(),
-    temperature,
-    precipitation,
-    windSpeed: ws,
-    cloudCover,
-    dewPoint,
-  };
 }

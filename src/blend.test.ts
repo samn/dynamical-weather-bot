@@ -1,17 +1,27 @@
 import { describe, it, expect } from "vitest";
 import {
-  computeCommonTimeRange,
+  computeDisplayRange,
   computeWeights,
   blendForecasts,
   blendSingleVariable,
   lookupAccuracy,
   lookupBiases,
 } from "./blend.js";
-import type { ModelForecast, AccuracyGrid, ForecastPoint, NearbyStation } from "./types.js";
+import type {
+  ModelForecast,
+  ModelId,
+  AccuracyGrid,
+  ForecastPoint,
+  NearbyStation,
+} from "./types.js";
 
+/** Valid time of a point with hoursFromNow 0 (also every test model's init time) */
+const BASE_MS = Date.parse("2026-03-16T00:00:00.000Z");
+
+/** A forecast point; unless given, its valid time follows its hoursFromNow */
 function makeForecastPoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
-    time: "2026-03-16T00:00:00.000Z",
+    time: new Date(BASE_MS + (overrides.hoursFromNow ?? 0) * 3600 * 1000).toISOString(),
     hoursFromNow: 0,
     median: 10,
     p10: 8,
@@ -584,15 +594,86 @@ describe("blendForecasts", () => {
     expect(() => blendForecasts([], EMPTY_GRID)).toThrow("At least one ensemble model is required");
   });
 
-  it("matches HRRR points by rounded hoursFromNow", () => {
-    // GEFS at 3.1 hours, HRRR at 2.9 hours — both round to 3
-    const gefs = makeGefs([{ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 3.1 }]);
-    const hrrr = makeHrrr([{ median: 20, p10: 20, p90: 20, min: 20, max: 20, hoursFromNow: 2.9 }]);
+  it("matches models by valid time, not by hoursFromNow", () => {
+    // Same valid time, but hoursFromNow computed at different fetch times
+    const time = "2026-03-16T03:00:00.000Z";
+    const gefs = makeGefs([{ median: 10, time, hoursFromNow: 3.4 }]);
+    const hrrr = makeHrrr([{ median: 20, time, hoursFromNow: 2.6 }]);
 
     const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
 
     // Equal weights (no accuracy data) → blended median = 15
     expect(result.temperature[0]!.median).toBeCloseTo(15, 5);
+  });
+
+  it("interpolates a coarser model onto the base model's timesteps", () => {
+    // 3-hourly GEFS, 6-hourly ECMWF: without interpolation ECMWF would only
+    // join the blend every other step and the line would zigzag
+    const gefs = makeGefs([0, 3, 6].map((h) => ({ median: 10, hoursFromNow: h })));
+    const ecmwf = makeEcmwf([
+      { median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 0 },
+      { median: 16, p10: 14, p90: 18, min: 12, max: 20, hoursFromNow: 6 },
+    ]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    expect(result.temperature.map((p) => p.median)).toEqual([10, 11.5, 13]);
+    // Interpolated ECMWF bands at +3h: p10 11, p90 15 — averaged with GEFS
+    expect(result.temperature[1]!.p10).toBeCloseTo((8 + 11) / 2 + (11.5 - (10 + 13) / 2), 5);
+  });
+
+  it("fills a coarser model's precipitation from the interval containing the step", () => {
+    // Precipitation is a mean rate over the interval ending at each point:
+    // ECMWF's +6h value covers 0–6h, so it (not a lerp with +0h) is its
+    // estimate at +3h
+    const gefs = makeGefs([0, 3, 6].map((h) => ({ median: 10, hoursFromNow: h })));
+    const ecmwf = makeEcmwf([
+      { median: 0, hoursFromNow: 0 },
+      { median: 16, p10: 14, p90: 18, min: 12, max: 20, hoursFromNow: 6 },
+    ]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    expect(result.precipitation.map((p) => p.median)).toEqual([5, 13, 13]);
+    expect(result.temperature[1]!.median).toBe(9);
+  });
+
+  it("does not interpolate across gaps wider than 6 hours", () => {
+    const gefs = makeGefs([{ median: 10, hoursFromNow: 6 }]);
+    const ecmwf = makeEcmwf([
+      { median: 20, hoursFromNow: 0 },
+      { median: 20, hoursFromNow: 12 },
+    ]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    expect(result.temperature[0]!.median).toBe(10);
+  });
+
+  it("weights each model by its own lead time since init", () => {
+    // GEFS is poor at 24h lead but good at 0h; HRRR is middling throughout.
+    // At the same valid time GEFS (init 24h earlier) is at lead 24h.
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.0, "24": 4.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 2.0, "24": 2.0 } },
+          },
+        },
+      },
+    };
+    const gefs = { ...makeGefs([{ median: 10 }]), initTime: "2026-03-15T00:00:00.000Z" };
+    const hrrr = makeHrrr([{ median: 20 }]);
+
+    const result = blendForecasts([gefs, hrrr], grid);
+
+    // GEFS at lead 24h: raw weights 1/16 vs 1/4 → HRRR dominates
+    const gefsW = 0.85 * (1 / 16 / (1 / 16 + 1 / 4)) + 0.15 * 0.5;
+    expect(result.temperature[0]!.median).toBeCloseTo(gefsW * 10 + (1 - gefsW) * 20, 5);
   });
 
   it("blends two ensemble models (GEFS + ECMWF) with equal weights", () => {
@@ -708,6 +789,39 @@ describe("blendForecasts", () => {
 
     const result = blendForecasts([gefs, hrrr], grid);
     expect(result.temperature[0]!.median).toBeCloseTo(14.5, 1);
+  });
+
+  it("applies temperature bias only to temperature", () => {
+    // A temperature bias (°C) is meaningless for wind (m/s), cloud cover
+    // (fraction) or dew point, and precipitation is never debiased
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 2.0 }, precipitation_surface: { "0": 1.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 2.0 }, precipitation_surface: { "0": 1.0 } },
+          },
+          biases: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.5 }, precipitation_surface: { "0": -0.5 } },
+            "NOAA HRRR": { temperature_2m: { "0": 1.5 }, precipitation_surface: { "0": -0.5 } },
+          },
+        },
+      },
+    };
+    const point = { median: 0.5, p10: 0.5, p90: 0.5, min: 0.5, max: 0.5 };
+    const gefs = { ...makeGefs([point]), dewPoint: [makeForecastPoint(point)] };
+    const hrrr = { ...makeHrrr([point]), dewPoint: [makeForecastPoint(point)] };
+
+    const result = blendForecasts([gefs, hrrr], grid);
+
+    expect(result.temperature[0]!.median).toBeCloseTo(-1, 5);
+    expect(result.cloudCover[0]!.median).toBeCloseTo(0.5, 5);
+    expect(result.windSpeed[0]!.median).toBeCloseTo(0.5, 5);
+    expect(result.precipitation[0]!.median).toBeCloseTo(0.5, 5);
+    expect(result.dewPoint![0]!.median).toBeCloseTo(0.5, 5);
   });
 });
 
@@ -827,49 +941,84 @@ function pts(startHour: number, endHour: number, stepHours: number): ForecastPoi
   return result;
 }
 
-describe("computeCommonTimeRange", () => {
-  it("returns the intersection of overlapping time ranges", () => {
-    const inputs = [
-      { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
-      { model: "NOAA HRRR" as const, points: pts(6, 48, 1), isEnsemble: false },
-    ];
-    const range = computeCommonTimeRange(inputs);
-    expect(range).toBeDefined();
-    // HRRR starts later (hour 6) and ends earlier (hour 48)
-    expect(range![0]).toBe(new Date(Date.UTC(2026, 3, 1, 6)).getTime());
-    expect(range![1]).toBe(new Date(Date.UTC(2026, 3, 1, 48)).getTime());
+const at = (h: number) => Date.UTC(2026, 3, 1, h);
+const input = (model: ModelId, points: ForecastPoint[], isEnsemble = model !== "NOAA HRRR") => ({
+  model,
+  points,
+  isEnsemble,
+});
+
+describe("computeDisplayRange", () => {
+  /** A "now" far enough out that the horizon cap doesn't apply */
+  const FAR_NOW = at(0) + 1000 * 3600 * 1000;
+
+  it("starts at the latest model start and ends at the earliest ensemble end", () => {
+    const range = computeDisplayRange(
+      [
+        [
+          input("NOAA GEFS", pts(0, 90, 3)),
+          input("NOAA HRRR", pts(6, 48, 1)),
+          input("ECMWF AIFS", pts(3, 84, 6)),
+        ],
+      ],
+      undefined,
+      FAR_NOW,
+    );
+    // HRRR starts latest; HRRR ends first, but the ensembles run on past it
+    expect(range).toEqual([at(6), at(81)]);
+  });
+
+  it("caps the end at the forecast horizon past now", () => {
+    const now = at(10);
+    const range = computeDisplayRange([[input("NOAA GEFS", pts(0, 120, 3))]], undefined, now);
+    expect(range).toEqual([at(0), now + 72 * 3600 * 1000]);
+  });
+
+  it("spans each model across all variables", () => {
+    // AIFS precipitation starts a step late (undefined at lead 0)
+    const range = computeDisplayRange(
+      [
+        [input("NOAA GEFS", pts(0, 72, 3)), input("ECMWF AIFS", pts(0, 72, 6))],
+        [input("NOAA GEFS", pts(3, 72, 3)), input("ECMWF AIFS", pts(6, 72, 6))],
+      ],
+      undefined,
+      FAR_NOW,
+    );
+    expect(range).toEqual([at(0), at(72)]);
+  });
+
+  it("ignores disabled models", () => {
+    const inputs = [[input("NOAA GEFS", pts(0, 72, 3)), input("ECMWF AIFS", pts(12, 60, 6))]];
+    expect(computeDisplayRange(inputs, new Set<ModelId>(["NOAA GEFS"]), FAR_NOW)).toEqual([
+      at(0),
+      at(72),
+    ]);
+  });
+
+  it("falls back to all models when no enabled model has data", () => {
+    const inputs = [[input("NOAA GEFS", pts(0, 72, 3))]];
+    expect(computeDisplayRange(inputs, new Set<ModelId>(["NOAA HRRR"]), FAR_NOW)).toEqual([
+      at(0),
+      at(72),
+    ]);
+  });
+
+  it("uses deterministic models' ends when no ensemble is present", () => {
+    const range = computeDisplayRange([[input("NOAA HRRR", pts(0, 48, 1))]], undefined, FAR_NOW);
+    expect(range).toEqual([at(0), at(48)]);
   });
 
   it("returns undefined for empty inputs", () => {
-    expect(computeCommonTimeRange([])).toBeUndefined();
+    expect(computeDisplayRange([], undefined, FAR_NOW)).toBeUndefined();
+    expect(computeDisplayRange([[input("NOAA GEFS", [])]], undefined, FAR_NOW)).toBeUndefined();
   });
 
-  it("returns undefined when inputs have no overlap", () => {
-    const inputs = [
-      { model: "NOAA GEFS" as const, points: pts(0, 24, 3), isEnsemble: true },
-      { model: "NOAA HRRR" as const, points: pts(48, 72, 1), isEnsemble: false },
-    ];
-    expect(computeCommonTimeRange(inputs)).toBeUndefined();
-  });
-
-  it("skips inputs with empty points", () => {
-    const inputs = [
-      { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
-      { model: "NOAA HRRR" as const, points: [], isEnsemble: false },
-    ];
-    const range = computeCommonTimeRange(inputs);
-    expect(range).toBeDefined();
-    expect(range![0]).toBe(new Date(Date.UTC(2026, 3, 1, 0)).getTime());
-    expect(range![1]).toBe(new Date(Date.UTC(2026, 3, 1, 72)).getTime());
-  });
-
-  it("returns same range regardless of which models are included", () => {
-    const gefs = { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true };
-    const hrrr = { model: "NOAA HRRR" as const, points: pts(6, 48, 1), isEnsemble: false };
-    const ecmwf = { model: "ECMWF IFS ENS" as const, points: pts(0, 72, 3), isEnsemble: true };
-
-    const allModels = computeCommonTimeRange([gefs, hrrr, ecmwf]);
-    const gefsOnly = computeCommonTimeRange([gefs, hrrr, ecmwf]);
-    expect(allModels).toEqual(gefsOnly);
+  it("returns undefined when models don't overlap", () => {
+    const range = computeDisplayRange(
+      [[input("NOAA GEFS", pts(0, 10, 1)), input("ECMWF IFS ENS", pts(20, 30, 1))]],
+      undefined,
+      FAR_NOW,
+    );
+    expect(range).toBeUndefined();
   });
 });
