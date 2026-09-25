@@ -221,14 +221,14 @@ describe("setCache / getCached", () => {
       { model: "ECMWF IFS ENS", points, isEnsemble: true },
     ]);
 
-    setCache(40, -74, mockForecast, modelInputs, false);
+    setCache(40, -74, mockForecast, modelInputs, ["NOAA HRRR"]);
     const result = getCached(40, -74);
 
     expect(result).not.toBeNull();
     expect(result!.modelInputs).not.toBeNull();
     expect(result!.modelInputs!.get("temperature")).toHaveLength(2);
     expect(result!.modelInputs!.get("temperature")![0]!.model).toBe("NOAA GEFS");
-    expect(result!.hrrrAvailable).toBe(false);
+    expect(result!.unavailableModels).toEqual(["NOAA HRRR"]);
   });
 
   it("returns null modelInputs for legacy cache entries without per-model data", () => {
@@ -237,6 +237,16 @@ describe("setCache / getCached", () => {
 
     expect(result).not.toBeNull();
     expect(result!.modelInputs).toBeNull();
-    expect(result!.hrrrAvailable).toBe(true);
+    expect(result!.unavailableModels).toEqual([]);
+  });
+
+  it("reads HRRR availability from legacy entries", () => {
+    localStorage.setItem(
+      "weather-cache",
+      JSON.stringify({
+        "40.00,-74.00": { timestamp: Date.now(), forecast: mockForecast, hrrrAvailable: false },
+      }),
+    );
+    expect(getCached(40, -74)!.unavailableModels).toEqual(["NOAA HRRR"]);
   });
 });

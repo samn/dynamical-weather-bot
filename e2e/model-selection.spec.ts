@@ -313,6 +313,44 @@ test.describe("model controls with cached forecast", () => {
     await expect(page.locator("#model-ecmwf")).toBeChecked();
   });
 
+  test("shows the other models when only an unavailable model is selected", async ({ page }) => {
+    // Only HRRR selected, at a location outside HRRR coverage
+    await page.addInitScript(() => {
+      localStorage.setItem("enabled-models", JSON.stringify(["NOAA HRRR"]));
+    });
+    await blockZarrRequests(page);
+    await mockZipApi(page);
+    await seedCache(page);
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(err.message));
+    await page.goto("/");
+
+    const tempPixelSum = () =>
+      page.evaluate(() => {
+        const canvas = document.getElementById("temp-chart") as HTMLCanvasElement;
+        const { data } = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i]!;
+        return sum;
+      });
+
+    await page.fill("#zip-input", "10001");
+    await expect(page.locator("#forecast")).not.toHaveClass(/hidden/);
+    // First render: the cached blend of the available models (GEFS + IFS)
+    const cachedRender = await tempPixelSum();
+
+    // Reblend from per-model inputs (view toggle there and back), then
+    // re-render from the reblended forecast (unit toggle there and back).
+    // Blending the available models reproduces the cached blend exactly.
+    await page.click("#per-model-view-btn");
+    await page.click("#blended-view-btn");
+    await page.click("#metric-btn");
+    await page.click("#imperial-btn");
+
+    expect(await tempPixelSum()).toBe(cachedRender);
+    expect(errors).toEqual([]);
+  });
+
   test("blend toggle buttons are visible and Magic Blend is active when loading from cache", async ({
     page,
   }) => {

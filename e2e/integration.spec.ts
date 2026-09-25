@@ -507,6 +507,32 @@ test.describe("real forecast integration", () => {
 
   // ─── Test 6: Cache-based reload performance ─────────────────────────
 
+  test("still loads when one model's data store is down", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.addInitScript(() => localStorage.clear());
+    await proxyExternalRequests(page);
+    // Registered after the proxy, so it takes precedence for this store
+    await page.route("**/dynamical-ecmwf-aifs-ens.s3.us-west-2.amazonaws.com/**", (route) =>
+      route.abort("failed"),
+    );
+    await page.goto("/?lat=40.75&lon=-74");
+    await waitForForecastLoad(page);
+
+    await expect(page.locator("#error")).toHaveClass(/hidden/);
+    for (const chartId of ["temp-chart", "precip-chart", "wind-chart", "cloud-chart"]) {
+      expect(await canvasHasContent(page, chartId), `${chartId} rendered`).toBe(true);
+    }
+    // AIFS is marked unavailable and left out; the other models are blended
+    const aifsLabel = page.locator(".model-checkbox", { has: page.locator("#model-aifs") });
+    await expect(aifsLabel).toHaveClass(/unavailable/);
+    await expect(page.locator("#model-aifs")).not.toBeChecked();
+    const entry = await extractCacheEntry(page);
+    const modelInputs = entry!.modelInputs as Record<string, CachedModelInput[]>;
+    const models = modelInputs.temperature!.map((i) => i.model);
+    expect(models).toContain("NOAA GEFS");
+    expect(models).not.toContain("ECMWF AIFS");
+  });
+
   test("cached forecast loads quickly on page reload", async ({ page }) => {
     test.setTimeout(60_000);
 
