@@ -9,9 +9,13 @@ import {
 } from "./blend.js";
 import type { ModelForecast, AccuracyGrid, ForecastPoint, NearbyStation } from "./types.js";
 
+/** Valid time of a point with hoursFromNow 0 (also every test model's init time) */
+const BASE_MS = Date.parse("2026-03-16T00:00:00.000Z");
+
+/** A forecast point; unless given, its valid time follows its hoursFromNow */
 function makeForecastPoint(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
-    time: "2026-03-16T00:00:00.000Z",
+    time: new Date(BASE_MS + (overrides.hoursFromNow ?? 0) * 3600 * 1000).toISOString(),
     hoursFromNow: 0,
     median: 10,
     p10: 8,
@@ -584,15 +588,70 @@ describe("blendForecasts", () => {
     expect(() => blendForecasts([], EMPTY_GRID)).toThrow("At least one ensemble model is required");
   });
 
-  it("matches HRRR points by rounded hoursFromNow", () => {
-    // GEFS at 3.1 hours, HRRR at 2.9 hours — both round to 3
-    const gefs = makeGefs([{ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 3.1 }]);
-    const hrrr = makeHrrr([{ median: 20, p10: 20, p90: 20, min: 20, max: 20, hoursFromNow: 2.9 }]);
+  it("matches models by valid time, not by hoursFromNow", () => {
+    // Same valid time, but hoursFromNow computed at different fetch times
+    const time = "2026-03-16T03:00:00.000Z";
+    const gefs = makeGefs([{ median: 10, time, hoursFromNow: 3.4 }]);
+    const hrrr = makeHrrr([{ median: 20, time, hoursFromNow: 2.6 }]);
 
     const result = blendForecasts([gefs, hrrr], EMPTY_GRID);
 
     // Equal weights (no accuracy data) → blended median = 15
     expect(result.temperature[0]!.median).toBeCloseTo(15, 5);
+  });
+
+  it("interpolates a coarser model onto the base model's timesteps", () => {
+    // 3-hourly GEFS, 6-hourly ECMWF: without interpolation ECMWF would only
+    // join the blend every other step and the line would zigzag
+    const gefs = makeGefs([0, 3, 6].map((h) => ({ median: 10, hoursFromNow: h })));
+    const ecmwf = makeEcmwf([
+      { median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: 0 },
+      { median: 16, p10: 14, p90: 18, min: 12, max: 20, hoursFromNow: 6 },
+    ]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    expect(result.temperature.map((p) => p.median)).toEqual([10, 11.5, 13]);
+    // Interpolated ECMWF bands at +3h: p10 11, p90 15 — averaged with GEFS
+    expect(result.temperature[1]!.p10).toBeCloseTo((8 + 11) / 2 + (11.5 - (10 + 13) / 2), 5);
+  });
+
+  it("does not interpolate across gaps wider than 6 hours", () => {
+    const gefs = makeGefs([{ median: 10, hoursFromNow: 6 }]);
+    const ecmwf = makeEcmwf([
+      { median: 20, hoursFromNow: 0 },
+      { median: 20, hoursFromNow: 12 },
+    ]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    expect(result.temperature[0]!.median).toBe(10);
+  });
+
+  it("weights each model by its own lead time since init", () => {
+    // GEFS is poor at 24h lead but good at 0h; HRRR is middling throughout.
+    // At the same valid time GEFS (init 24h earlier) is at lead 24h.
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.0, "24": 4.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 2.0, "24": 2.0 } },
+          },
+        },
+      },
+    };
+    const gefs = { ...makeGefs([{ median: 10 }]), initTime: "2026-03-15T00:00:00.000Z" };
+    const hrrr = makeHrrr([{ median: 20 }]);
+
+    const result = blendForecasts([gefs, hrrr], grid);
+
+    // GEFS at lead 24h: raw weights 1/16 vs 1/4 → HRRR dominates
+    const gefsW = 0.85 * (1 / 16 / (1 / 16 + 1 / 4)) + 0.15 * 0.5;
+    expect(result.temperature[0]!.median).toBeCloseTo(gefsW * 10 + (1 - gefsW) * 20, 5);
   });
 
   it("blends two ensemble models (GEFS + ECMWF) with equal weights", () => {
@@ -708,6 +767,39 @@ describe("blendForecasts", () => {
 
     const result = blendForecasts([gefs, hrrr], grid);
     expect(result.temperature[0]!.median).toBeCloseTo(14.5, 1);
+  });
+
+  it("applies temperature bias only to temperature", () => {
+    // A temperature bias (°C) is meaningless for wind (m/s), cloud cover
+    // (fraction) or dew point, and precipitation is never debiased
+    const grid: AccuracyGrid = {
+      gridResolution: 0.5,
+      bounds: { minLat: 24, maxLat: 50, minLon: -130, maxLon: -65 },
+      cells: {
+        "40.0,-90.0": {
+          stationCount: 5,
+          metrics: {
+            "NOAA GEFS": { temperature_2m: { "0": 2.0 }, precipitation_surface: { "0": 1.0 } },
+            "NOAA HRRR": { temperature_2m: { "0": 2.0 }, precipitation_surface: { "0": 1.0 } },
+          },
+          biases: {
+            "NOAA GEFS": { temperature_2m: { "0": 1.5 }, precipitation_surface: { "0": -0.5 } },
+            "NOAA HRRR": { temperature_2m: { "0": 1.5 }, precipitation_surface: { "0": -0.5 } },
+          },
+        },
+      },
+    };
+    const point = { median: 0.5, p10: 0.5, p90: 0.5, min: 0.5, max: 0.5 };
+    const gefs = { ...makeGefs([point]), dewPoint: [makeForecastPoint(point)] };
+    const hrrr = { ...makeHrrr([point]), dewPoint: [makeForecastPoint(point)] };
+
+    const result = blendForecasts([gefs, hrrr], grid);
+
+    expect(result.temperature[0]!.median).toBeCloseTo(-1, 5);
+    expect(result.cloudCover[0]!.median).toBeCloseTo(0.5, 5);
+    expect(result.windSpeed[0]!.median).toBeCloseTo(0.5, 5);
+    expect(result.precipitation[0]!.median).toBeCloseTo(0.5, 5);
+    expect(result.dewPoint![0]!.median).toBeCloseTo(0.5, 5);
   });
 });
 
