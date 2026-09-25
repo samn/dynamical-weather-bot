@@ -1,5 +1,6 @@
 import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
+import { FORECAST_HORIZON_HOURS } from "./types.js";
 import type { LatLon, ForecastPoint, ForecastVariable, ModelForecast } from "./types.js";
 import { normalizeLongitude } from "./geo.js";
 import { dewPointFromRelativeHumidity } from "./humidity.js";
@@ -17,9 +18,6 @@ function getForecastStore(): Promise<IcechunkStore> {
   return forecastStorePromise;
 }
 
-/** Number of 3-hourly steps to cover 72 hours */
-const STEPS_72H = 24; // 72 / 3
-
 /** GEFS grid resolution: 0.25 degrees */
 const GRID_RESOLUTION = 0.25;
 
@@ -29,10 +27,14 @@ export function latToIndex(lat: number): number {
   return Math.round((90 - clamped) / GRID_RESOLUTION);
 }
 
-/** Longitude values: -180.0 to 179.75 in 0.25 steps (1440 values) */
+/** Number of longitude values in the 0.25° global grid */
+const NUM_LONGITUDES = 360 / GRID_RESOLUTION;
+
+/** Longitude values: -180.0 to 179.75 in 0.25 steps (1440 values). The grid
+ *  wraps around, so longitudes nearer 180° than 179.75° map to index 0. */
 export function lonToIndex(lon: number): number {
   const normalized = normalizeLongitude(lon);
-  return Math.round((normalized + 180) / GRID_RESOLUTION);
+  return Math.round((normalized + 180) / GRID_RESOLUTION) % NUM_LONGITUDES;
 }
 
 /**
@@ -164,18 +166,38 @@ export async function getLatestInitTimeIndex(
 }
 
 /**
- * Get the lead_time values (as hours from init_time).
+ * Get all lead_time values (as hours from init_time).
  * lead_time is stored as int64 seconds.
  */
-async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
+export async function getLeadTimeHours(store: IcechunkStore): Promise<number[]> {
   const arr = await zarr.open(store.resolve("lead_time"), { kind: "array" });
-  const result = await zarr.get(arr, [zarr.slice(numSteps)]);
+  const result = await zarr.get(arr);
   const data = coordToNumbers(result.data);
   // Seconds -> hours
   return data.map((s) => s / 3600);
 }
 
-/** Convert ensemble values at each time step into ForecastPoints */
+/**
+ * Number of leading lead times to fetch so the forecast reaches
+ * `horizonHours` past now. Models are initialized hours before they're
+ * published — GEFS and IFS only once a day — so a fixed count of lead
+ * times from init falls well short of the horizon by the time it's shown.
+ * Includes the first lead time at or past the horizon, so the series
+ * spans it; returns every lead time if none reaches it.
+ */
+export function stepsToHorizon(
+  leadTimeHours: number[],
+  initTime: Date,
+  nowMs: number,
+  horizonHours: number = FORECAST_HORIZON_HOURS,
+): number {
+  const endLead = (nowMs - initTime.getTime()) / 3600000 + horizonHours;
+  const idx = leadTimeHours.findIndex((h) => h >= endLead);
+  return idx === -1 ? leadTimeHours.length : idx + 1;
+}
+
+/** Convert ensemble values at each time step into ForecastPoints.
+ *  Timesteps where no member has a finite value are omitted. */
 export function toForecastPoints(
   ensembleData: number[][],
   leadTimeHours: number[],
@@ -193,6 +215,10 @@ export function toForecastPoints(
         values.push(val);
       }
     }
+    // No member has data here (e.g. precipitation at lead 0, which is an
+    // accumulation and so undefined at init) — skip the timestep rather
+    // than report a fabricated 0
+    if (values.length === 0) continue;
     values.sort((a, b) => a - b);
 
     const hours = leadTimeHours[t] ?? t * 3;
@@ -224,6 +250,7 @@ export interface GefsMetadata {
   store: IcechunkStore;
   initIdx: number;
   initTime: Date;
+  /** Lead times (hours) to fetch, starting at lead 0 */
   leadTimeHours: number[];
   latIdx: number;
   lonIdx: number;
@@ -236,10 +263,14 @@ export async function fetchGefsMetadata(location: LatLon): Promise<GefsMetadata>
   const lonIdx = lonToIndex(location.longitude);
   const store = await getForecastStore();
 
-  const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
+  const [{ index: initIdx, initTime }, allLeadTimeHours] = await Promise.all([
     getLatestInitTimeIndex(store),
-    getLeadTimeHours(store, STEPS_72H),
+    getLeadTimeHours(store),
   ]);
+  const leadTimeHours = allLeadTimeHours.slice(
+    0,
+    stepsToHorizon(allLeadTimeHours, initTime, Date.now()),
+  );
 
   return { store, initIdx, initTime, leadTimeHours, latIdx, lonIdx, numEnsemble: 31 };
 }
@@ -250,7 +281,7 @@ export async function fetchGefsVariable(
   variable: ForecastVariable,
 ): Promise<ForecastPoint[]> {
   const { store, initIdx, latIdx, lonIdx, numEnsemble, leadTimeHours, initTime } = meta;
-  const steps = STEPS_72H;
+  const steps = leadTimeHours.length;
 
   if (variable === "temperature") {
     const data = await fetchForecastVariable(

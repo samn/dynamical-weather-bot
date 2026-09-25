@@ -1,3 +1,4 @@
+import { FORECAST_HORIZON_HOURS } from "./types.js";
 import type { ForecastData, ForecastPoint, Aberration } from "./types.js";
 import { formatDayPart } from "./format.js";
 import { detectRainbowWindows } from "./rainbow.js";
@@ -19,9 +20,6 @@ const WIND_HIGH_THRESHOLD = 10;
 /** Threshold for significant cloud cover change within forecast (fraction 0-1) */
 const CLOUD_CHANGE_THRESHOLD = 0.3;
 
-/** Length of the forecast horizon the app promises, in hours */
-const FORECAST_HORIZON_HOURS = 72;
-
 /**
  * Narrow every series of a forecast to the timesteps an alert may talk
  * about: from now until the end of the forecast on screen.
@@ -29,8 +27,8 @@ const FORECAST_HORIZON_HOURS = 72;
  * Both bounds matter. Models are initialized hours before the page loads and
  * blending unions their timesteps, so a blended series can start well before
  * "now" — a model initialized last night carries last night's weather. It can
- * also run past the right edge of the charts, since the charts stop at the
- * earliest end shared by all enabled models (`computeCommonTimeRange`). Either
+ * also run past the right edge of the charts, since the charts stop where
+ * the enabled models stop overlapping (`computeDisplayRange`). Either
  * way the user is being told about weather they cannot see.
  *
  * Timestamps are compared against the wall clock rather than each point's

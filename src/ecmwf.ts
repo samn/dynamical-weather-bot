@@ -4,8 +4,9 @@ import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./t
 import {
   latToIndex,
   lonToIndex,
-  coordToNumbers,
   getLatestInitTimeIndex,
+  getLeadTimeHours,
+  stepsToHorizon,
   toForecastPoints,
   windSpeed,
   precipToMmHr,
@@ -25,9 +26,6 @@ function getStore(): Promise<IcechunkStore> {
   return storePromise;
 }
 
-/** Number of 3-hourly steps to cover 72 hours */
-const STEPS_72H = 24;
-
 /** Number of ECMWF IFS ENS ensemble members (1 control + 50 perturbed) */
 const NUM_ENSEMBLE = 51;
 
@@ -43,6 +41,7 @@ export interface EcmwfMetadata {
   store: IcechunkStore;
   initIdx: number;
   initTime: Date;
+  /** Lead times (hours) to fetch, starting at lead 0 */
   leadTimeHours: number[];
   latIdx: number;
   lonIdx: number;
@@ -55,19 +54,16 @@ export async function fetchEcmwfMetadata(location: LatLon): Promise<EcmwfMetadat
   const lonIdx = lonToIndex(location.longitude);
   const store = await getStore();
 
-  const [{ index: initIdx, initTime }, leadTimeHours] = await Promise.all([
+  const [{ index: initIdx, initTime }, allLeadTimeHours] = await Promise.all([
     getLatestInitTimeIndex(store),
-    getLeadTimeHours(store, STEPS_72H),
+    getLeadTimeHours(store),
   ]);
+  const leadTimeHours = allLeadTimeHours.slice(
+    0,
+    stepsToHorizon(allLeadTimeHours, initTime, Date.now()),
+  );
 
   return { store, initIdx, initTime, leadTimeHours, latIdx, lonIdx, numEnsemble: NUM_ENSEMBLE };
-}
-
-async function getLeadTimeHours(store: IcechunkStore, numSteps: number): Promise<number[]> {
-  const arr = await zarr.open(store.resolve("lead_time"), { kind: "array" });
-  const result = await zarr.get(arr, [zarr.slice(numSteps)]);
-  const data = coordToNumbers(result.data);
-  return data.map((s) => s / 3600);
 }
 
 /**
@@ -116,7 +112,7 @@ export async function fetchEcmwfVariable(
   variable: ForecastVariable,
 ): Promise<ForecastPoint[]> {
   const { store, initIdx, latIdx, lonIdx, numEnsemble, leadTimeHours, initTime } = meta;
-  const steps = STEPS_72H;
+  const steps = leadTimeHours.length;
 
   if (variable === "temperature") {
     const data = await fetchForecastVariable(

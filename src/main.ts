@@ -34,7 +34,7 @@ import {
 import type { ModelId } from "./types.js";
 import {
   blendSingleVariable,
-  computeCommonTimeRange,
+  computeDisplayRange,
   computeWeights,
   lookupAccuracy,
   type ModelVariableInput,
@@ -186,9 +186,10 @@ function updateRainbowTimes(forecast: ForecastData): void {
   cachedRainbowTimes = detectRainbowWindows(forecast).map((w) => (w.startMs + w.endMs) / 2);
 }
 
+/** Recompute the chart time range from every variable's inputs, for the
+ *  currently enabled models */
 function updateCachedTimeRange(inputs: Map<ForecastVariable, ModelVariableInput[]>): void {
-  const firstVar = inputs.values().next().value;
-  cachedTimeRange = firstVar ? computeCommonTimeRange(firstVar) : undefined;
+  cachedTimeRange = computeDisplayRange(inputs.values(), getEnabledModels(), Date.now());
 }
 
 /** Last selected zip code for display */
@@ -460,6 +461,8 @@ function reblendAndRender(): void {
   const viewMode = getViewMode();
   const useMagic = getMagicBlend();
   const grid = loadAccuracyGrid();
+  // The enabled models (and the clock) decide how far the charts extend
+  updateCachedTimeRange(cachedModelInputs);
 
   // The blended forecast drives aberrations, rainbow markers, and (in
   // per-model view too) the dew point / feels-like series on the temp chart.

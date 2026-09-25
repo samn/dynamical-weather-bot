@@ -99,8 +99,11 @@ test.describe("real forecast integration", () => {
     for (const varName of variables) {
       const points = forecast[varName] as CachedPoint[];
       expect(points, `${varName} should exist`).toBeDefined();
+      // 3-hourly steps from the base model's init until 72h past now. GEFS
+      // runs once a day and can be ~30h old before the next run lands, so
+      // up to (30 + 72) / 3 + 1 = 35 steps.
       expect(points.length, `${varName} point count`).toBeGreaterThanOrEqual(20);
-      expect(points.length).toBeLessThanOrEqual(30);
+      expect(points.length, `${varName} point count`).toBeLessThanOrEqual(35);
 
       // Quantile ordering: min ≤ p10 ≤ median ≤ p90 ≤ max
       // (skip points with null/NaN values — JSON serialization converts NaN to null)
@@ -133,12 +136,12 @@ test.describe("real forecast integration", () => {
         expect(gapH).toBeLessThan(7);
       }
 
-      // Time span ~72 hours
-      const first = new Date(points[0]!.time).getTime();
+      // Series reach the 72h horizon past now (fetched up to the first
+      // lead time at or past it, so at most one 3h step beyond)
       const last = new Date(points[points.length - 1]!.time).getTime();
-      const spanH = (last - first) / (3600 * 1000);
-      expect(spanH, `${varName} spans ~72h`).toBeGreaterThan(60);
-      expect(spanH).toBeLessThanOrEqual(80);
+      const aheadH = (last - Date.now()) / (3600 * 1000);
+      expect(aheadH, `${varName} reaches ~72h ahead`).toBeGreaterThanOrEqual(71);
+      expect(aheadH, `${varName} reaches ~72h ahead`).toBeLessThanOrEqual(76);
     }
 
     // ── Variable-specific value ranges (skip null/NaN points) ──

@@ -1,13 +1,19 @@
 import { describe, it, expect } from "vitest";
 import {
-  computeCommonTimeRange,
+  computeDisplayRange,
   computeWeights,
   blendForecasts,
   blendSingleVariable,
   lookupAccuracy,
   lookupBiases,
 } from "./blend.js";
-import type { ModelForecast, AccuracyGrid, ForecastPoint, NearbyStation } from "./types.js";
+import type {
+  ModelForecast,
+  ModelId,
+  AccuracyGrid,
+  ForecastPoint,
+  NearbyStation,
+} from "./types.js";
 
 /** Valid time of a point with hoursFromNow 0 (also every test model's init time) */
 const BASE_MS = Date.parse("2026-03-16T00:00:00.000Z");
@@ -919,49 +925,84 @@ function pts(startHour: number, endHour: number, stepHours: number): ForecastPoi
   return result;
 }
 
-describe("computeCommonTimeRange", () => {
-  it("returns the intersection of overlapping time ranges", () => {
-    const inputs = [
-      { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
-      { model: "NOAA HRRR" as const, points: pts(6, 48, 1), isEnsemble: false },
-    ];
-    const range = computeCommonTimeRange(inputs);
-    expect(range).toBeDefined();
-    // HRRR starts later (hour 6) and ends earlier (hour 48)
-    expect(range![0]).toBe(new Date(Date.UTC(2026, 3, 1, 6)).getTime());
-    expect(range![1]).toBe(new Date(Date.UTC(2026, 3, 1, 48)).getTime());
+const at = (h: number) => Date.UTC(2026, 3, 1, h);
+const input = (model: ModelId, points: ForecastPoint[], isEnsemble = model !== "NOAA HRRR") => ({
+  model,
+  points,
+  isEnsemble,
+});
+
+describe("computeDisplayRange", () => {
+  /** A "now" far enough out that the horizon cap doesn't apply */
+  const FAR_NOW = at(0) + 1000 * 3600 * 1000;
+
+  it("starts at the latest model start and ends at the earliest ensemble end", () => {
+    const range = computeDisplayRange(
+      [
+        [
+          input("NOAA GEFS", pts(0, 90, 3)),
+          input("NOAA HRRR", pts(6, 48, 1)),
+          input("ECMWF AIFS", pts(3, 84, 6)),
+        ],
+      ],
+      undefined,
+      FAR_NOW,
+    );
+    // HRRR starts latest; HRRR ends first, but the ensembles run on past it
+    expect(range).toEqual([at(6), at(81)]);
+  });
+
+  it("caps the end at the forecast horizon past now", () => {
+    const now = at(10);
+    const range = computeDisplayRange([[input("NOAA GEFS", pts(0, 120, 3))]], undefined, now);
+    expect(range).toEqual([at(0), now + 72 * 3600 * 1000]);
+  });
+
+  it("spans each model across all variables", () => {
+    // AIFS precipitation starts a step late (undefined at lead 0)
+    const range = computeDisplayRange(
+      [
+        [input("NOAA GEFS", pts(0, 72, 3)), input("ECMWF AIFS", pts(0, 72, 6))],
+        [input("NOAA GEFS", pts(3, 72, 3)), input("ECMWF AIFS", pts(6, 72, 6))],
+      ],
+      undefined,
+      FAR_NOW,
+    );
+    expect(range).toEqual([at(0), at(72)]);
+  });
+
+  it("ignores disabled models", () => {
+    const inputs = [[input("NOAA GEFS", pts(0, 72, 3)), input("ECMWF AIFS", pts(12, 60, 6))]];
+    expect(computeDisplayRange(inputs, new Set<ModelId>(["NOAA GEFS"]), FAR_NOW)).toEqual([
+      at(0),
+      at(72),
+    ]);
+  });
+
+  it("falls back to all models when no enabled model has data", () => {
+    const inputs = [[input("NOAA GEFS", pts(0, 72, 3))]];
+    expect(computeDisplayRange(inputs, new Set<ModelId>(["NOAA HRRR"]), FAR_NOW)).toEqual([
+      at(0),
+      at(72),
+    ]);
+  });
+
+  it("uses deterministic models' ends when no ensemble is present", () => {
+    const range = computeDisplayRange([[input("NOAA HRRR", pts(0, 48, 1))]], undefined, FAR_NOW);
+    expect(range).toEqual([at(0), at(48)]);
   });
 
   it("returns undefined for empty inputs", () => {
-    expect(computeCommonTimeRange([])).toBeUndefined();
+    expect(computeDisplayRange([], undefined, FAR_NOW)).toBeUndefined();
+    expect(computeDisplayRange([[input("NOAA GEFS", [])]], undefined, FAR_NOW)).toBeUndefined();
   });
 
-  it("returns undefined when inputs have no overlap", () => {
-    const inputs = [
-      { model: "NOAA GEFS" as const, points: pts(0, 24, 3), isEnsemble: true },
-      { model: "NOAA HRRR" as const, points: pts(48, 72, 1), isEnsemble: false },
-    ];
-    expect(computeCommonTimeRange(inputs)).toBeUndefined();
-  });
-
-  it("skips inputs with empty points", () => {
-    const inputs = [
-      { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
-      { model: "NOAA HRRR" as const, points: [], isEnsemble: false },
-    ];
-    const range = computeCommonTimeRange(inputs);
-    expect(range).toBeDefined();
-    expect(range![0]).toBe(new Date(Date.UTC(2026, 3, 1, 0)).getTime());
-    expect(range![1]).toBe(new Date(Date.UTC(2026, 3, 1, 72)).getTime());
-  });
-
-  it("returns same range regardless of which models are included", () => {
-    const gefs = { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true };
-    const hrrr = { model: "NOAA HRRR" as const, points: pts(6, 48, 1), isEnsemble: false };
-    const ecmwf = { model: "ECMWF IFS ENS" as const, points: pts(0, 72, 3), isEnsemble: true };
-
-    const allModels = computeCommonTimeRange([gefs, hrrr, ecmwf]);
-    const gefsOnly = computeCommonTimeRange([gefs, hrrr, ecmwf]);
-    expect(allModels).toEqual(gefsOnly);
+  it("returns undefined when models don't overlap", () => {
+    const range = computeDisplayRange(
+      [[input("NOAA GEFS", pts(0, 10, 1)), input("ECMWF IFS ENS", pts(20, 30, 1))]],
+      undefined,
+      FAR_NOW,
+    );
+    expect(range).toBeUndefined();
   });
 });

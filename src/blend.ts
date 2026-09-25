@@ -7,6 +7,7 @@ import type {
   ForecastVariable,
   LatLon,
 } from "./types.js";
+import { FORECAST_HORIZON_HOURS } from "./types.js";
 import { haversineKm } from "./geo.js";
 
 /** Max distance (km) for per-station IDW at runtime */
@@ -303,22 +304,55 @@ export interface ModelVariableInput {
   initTime?: string;
 }
 
-/** Compute the intersection time range across all model inputs.
- *  Returns [startMs, endMs] or undefined if inputs are empty/non-overlapping. */
-export function computeCommonTimeRange(inputs: ModelVariableInput[]): [number, number] | undefined {
-  let latestStart = -Infinity;
-  let earliestEnd = Infinity;
-  for (const input of inputs) {
-    if (input.points.length === 0) continue;
-    const start = new Date(input.points[0]!.time).getTime();
-    const end = new Date(input.points[input.points.length - 1]!.time).getTime();
-    if (start > latestStart) latestStart = start;
-    if (end < earliestEnd) earliestEnd = end;
+/**
+ * The time range [startMs, endMs] the charts are drawn over, computed from
+ * every variable's per-model inputs.
+ *
+ * - Only `enabled` models count (all of them if none of the enabled models
+ *   has data), so disabling a short-range model lets the charts extend.
+ * - Each model spans from its earliest to its latest point across all
+ *   variables — a model's precipitation starts a step late, since it is
+ *   undefined at lead 0, and that must not push the chart start back.
+ * - Start: the latest model start, where every model has begun.
+ * - End: the earliest end among ensemble models, capped at the forecast
+ *   horizon. The deterministic HRRR only runs 48h; past its end the
+ *   ensembles carry the blend on alone.
+ *
+ * Returns undefined when there is no data or no overlap.
+ */
+export function computeDisplayRange(
+  inputsByVariable: Iterable<ModelVariableInput[]>,
+  enabled: ReadonlySet<ModelId> | undefined,
+  nowMs: number,
+  horizonHours: number = FORECAST_HORIZON_HOURS,
+): [number, number] | undefined {
+  const spans = new Map<ModelId, { start: number; end: number; isEnsemble: boolean }>();
+  for (const inputs of inputsByVariable) {
+    for (const input of inputs) {
+      for (const pt of input.points) {
+        const t = new Date(pt.time).getTime();
+        const span = spans.get(input.model);
+        if (!span) {
+          spans.set(input.model, { start: t, end: t, isEnsemble: input.isEnsemble });
+        } else {
+          span.start = Math.min(span.start, t);
+          span.end = Math.max(span.end, t);
+        }
+      }
+    }
   }
-  if (latestStart === -Infinity || earliestEnd === Infinity || latestStart >= earliestEnd) {
-    return undefined;
+
+  let models = [...spans.entries()];
+  if (enabled && models.some(([m]) => enabled.has(m))) {
+    models = models.filter(([m]) => enabled.has(m));
   }
-  return [latestStart, earliestEnd];
+  if (models.length === 0) return undefined;
+
+  const start = Math.max(...models.map(([, s]) => s.start));
+  const ensembles = models.filter(([, s]) => s.isEnsemble);
+  const endModels = ensembles.length > 0 ? ensembles : models;
+  const end = Math.min(...endModels.map(([, s]) => s.end), nowMs + horizonHours * 60 * 60 * 1000);
+  return start < end ? [start, end] : undefined;
 }
 
 /**
