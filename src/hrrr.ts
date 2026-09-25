@@ -1,7 +1,7 @@
 import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
 import proj4 from "proj4";
-import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
+import type { LatLon, ForecastPoint, ForecastVariable } from "./types.js";
 import {
   windSpeed,
   precipToMmHr,
@@ -201,33 +201,4 @@ export async function fetchHrrrVariable(
   // cloudCover
   const data = await fetchHrrrVar(meta, "total_cloud_cover_atmosphere");
   return toPoints(data.map(cloudCoverToFraction), leadTimeHours, initTime);
-}
-
-/**
- * Fetch HRRR forecast data for a location.
- * Returns null if the location is outside CONUS (HRRR coverage area).
- */
-export async function fetchHrrrForecast(location: LatLon): Promise<ModelForecast | null> {
-  const meta = await fetchHrrrMetadata(location);
-  if (!meta) return null;
-
-  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
-    fetchHrrrVariable(meta, "temperature"),
-    fetchHrrrVariable(meta, "precipitation"),
-    fetchHrrrVariable(meta, "windSpeed"),
-    fetchHrrrVariable(meta, "cloudCover"),
-    fetchHrrrVariable(meta, "dewPoint"),
-  ]);
-
-  return {
-    model: "NOAA HRRR",
-    isEnsemble: false,
-    location,
-    initTime: meta.initTime.toISOString(),
-    temperature,
-    precipitation,
-    windSpeed: ws,
-    cloudCover,
-    dewPoint,
-  };
 }

@@ -622,6 +622,22 @@ describe("blendForecasts", () => {
     expect(result.temperature[1]!.p10).toBeCloseTo((8 + 11) / 2 + (11.5 - (10 + 13) / 2), 5);
   });
 
+  it("fills a coarser model's precipitation from the interval containing the step", () => {
+    // Precipitation is a mean rate over the interval ending at each point:
+    // ECMWF's +6h value covers 0–6h, so it (not a lerp with +0h) is its
+    // estimate at +3h
+    const gefs = makeGefs([0, 3, 6].map((h) => ({ median: 10, hoursFromNow: h })));
+    const ecmwf = makeEcmwf([
+      { median: 0, hoursFromNow: 0 },
+      { median: 16, p10: 14, p90: 18, min: 12, max: 20, hoursFromNow: 6 },
+    ]);
+
+    const result = blendForecasts([gefs, ecmwf], EMPTY_GRID);
+
+    expect(result.precipitation.map((p) => p.median)).toEqual([5, 13, 13]);
+    expect(result.temperature[1]!.median).toBe(9);
+  });
+
   it("does not interpolate across gaps wider than 6 hours", () => {
     const gefs = makeGefs([{ median: 10, hoursFromNow: 6 }]);
     const ecmwf = makeEcmwf([

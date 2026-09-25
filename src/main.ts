@@ -616,18 +616,24 @@ function modelsWithData(inputs: Map<ForecastVariable, ModelVariableInput[]>): Se
   return models;
 }
 
+const LATEST_INIT_TIME_FETCHERS: Record<ModelId, () => Promise<string>> = {
+  "NOAA GEFS": fetchLatestInitTime,
+  "NOAA HRRR": fetchLatestHrrrInitTime,
+  "ECMWF IFS ENS": fetchLatestEcmwfInitTime,
+  "ECMWF AIFS": fetchLatestAifsInitTime,
+};
+
 /**
- * Fetch the most recent init_time across every model's store. Stores that
- * can't be reached are ignored; returns "" if none can be.
+ * Fetch the most recent init_time across the stores of `models`. Only the
+ * models the forecast is built from count: HRRR publishes hourly, so
+ * counting it outside its coverage would make every forecast look stale.
+ * Stores that can't be reached are ignored; returns "" if none can be.
  */
-async function fetchLatestAnyInitTime(): Promise<string> {
-  const initTimes = await Promise.all([
-    fetchLatestInitTime().catch(() => ""),
-    fetchLatestHrrrInitTime().catch(() => ""),
-    fetchLatestEcmwfInitTime().catch(() => ""),
-    fetchLatestAifsInitTime().catch(() => ""),
-  ]);
-  return initTimes.reduce((a, b) => (b > a ? b : a));
+async function fetchLatestAnyInitTime(models: ModelId[]): Promise<string> {
+  const initTimes = await Promise.all(
+    models.map((m) => LATEST_INIT_TIME_FETCHERS[m]().catch(() => "")),
+  );
+  return initTimes.reduce((a, b) => (b > a ? b : a), "");
 }
 
 async function checkForNewerForecast(
@@ -637,7 +643,7 @@ async function checkForNewerForecast(
   loadId: number,
 ): Promise<void> {
   try {
-    const latestInitTime = await fetchLatestAnyInitTime();
+    const latestInitTime = await fetchLatestAnyInitTime(availableModels());
     if (loadId !== currentLoadId) return;
     const isNewer = latestInitTime > knownInitTime;
     if (!forceRefetch && !isNewer) return;
@@ -862,7 +868,12 @@ async function loadForecast(location: LatLon): Promise<void> {
       return;
     }
 
-    // No cache — show skeleton charts and progressively load data
+    // No cache — show skeleton charts and progressively load data. Drop the
+    // previous location's data first so a failed load can't leave model
+    // toggles or the back button showing it under this location's label.
+    lastForecast = null;
+    cachedModelInputs = null;
+    cachedLocation = null;
     showSkeletonCharts();
 
     const sources = await openModelSources(location);
@@ -899,10 +910,6 @@ async function loadForecast(location: LatLon): Promise<void> {
     // progress chips.
     await Promise.all(
       BLEND_VARIABLES.map(async (variable) => {
-        const charted = variable !== "dewPoint";
-        const canvas = charted
-          ? (document.getElementById(VARIABLE_CANVAS[variable]) as HTMLCanvasElement)
-          : null;
         const arrived = new Map<ModelId, ModelVariableInput>();
         let skeletonGone: Promise<void> | null = null;
 
@@ -931,14 +938,19 @@ async function loadForecast(location: LatLon): Promise<void> {
               const blended = blendSingleVariable(variable, toBlend, location, grid, useMagic);
               results[variable] = blended;
 
-              if (canvas && variable !== "dewPoint") {
+              if (variable !== "dewPoint") {
+                const canvas = document.getElementById(
+                  VARIABLE_CANVAS[variable],
+                ) as HTMLCanvasElement;
                 skeletonGone ??= stopChartSkeleton(canvas);
                 await skeletonGone;
                 if (loadId !== currentLoadId) return;
                 renderVariableChart(variable, blended);
+                // Only counted on success: a failed fetch leaves the chip
+                // pending rather than marking it "done"
+                markModelVariableLoaded(src.model);
               }
             }
-            if (charted) markModelVariableLoaded(src.model);
           }),
         );
       }),
@@ -1021,6 +1033,7 @@ function showLocationSelectionWithBack(): void {
 // Location reset/back button handlers
 locationResetBtn.addEventListener("click", () => {
   // Show location selection, hide forecast, show back button if there was data
+  ++currentLocationRequestId;
   forecastEl.classList.add("hidden");
   forecastMetaBar.classList.add("hidden");
   modelControlsEl.classList.add("hidden");
@@ -1035,7 +1048,9 @@ locationResetBtn.addEventListener("click", () => {
 });
 
 locationBackBtn.addEventListener("click", () => {
-  // Go back to previously selected location's forecast
+  // Go back to previously selected location's forecast, abandoning any
+  // location lookup still in flight so it can't replace that forecast
+  ++currentLocationRequestId;
   showLocationDisplay();
   forecastMetaBar.classList.remove("hidden");
   if (lastForecast) {

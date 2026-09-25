@@ -456,13 +456,23 @@ function toTimedSeries(points: ForecastPoint[]): TimedPoint[] {
 
 /**
  * A model's forecast at `timeMs`: its own point when it has one, otherwise
- * a linear interpolation between the neighbouring points when they are at
- * most {@link MAX_INTERPOLATION_GAP_MS} apart. Interpolating lets a coarser
- * model (6-hourly AIFS) contribute at every step of a finer base model
- * (3-hourly GEFS) instead of dropping in and out of the blend every other
- * step, which made the blended line zigzag.
+ * an estimate from the neighbouring points when they are at most
+ * {@link MAX_INTERPOLATION_GAP_MS} apart. This lets a coarser model
+ * (6-hourly AIFS) contribute at every step of a finer base model (3-hourly
+ * GEFS) instead of dropping in and out of the blend every other step,
+ * which made the blended line zigzag.
+ *
+ * Instantaneous values are interpolated linearly. With `intervalMean`,
+ * each point is instead the mean over the interval ending at it (as
+ * precipitation rates are), so the estimate is the next point: the
+ * interval containing `timeMs`. Interpolating would bleed the previous
+ * interval's rain into it.
  */
-function sampleAt(series: TimedPoint[], timeMs: number): ForecastPoint | undefined {
+function sampleAt(
+  series: TimedPoint[],
+  timeMs: number,
+  intervalMean: boolean,
+): ForecastPoint | undefined {
   let lo = 0;
   let hi = series.length;
   while (lo < hi) {
@@ -480,9 +490,12 @@ function sampleAt(series: TimedPoint[], timeMs: number): ForecastPoint | undefin
   const lerp = (a: number, b: number) => a + (b - a) * f;
   const a = before.point;
   const b = after.point;
+  const time = new Date(timeMs).toISOString();
+  const hoursFromNow = lerp(a.hoursFromNow, b.hoursFromNow);
+  if (intervalMean) return { ...b, time, hoursFromNow };
   return {
-    time: new Date(timeMs).toISOString(),
-    hoursFromNow: lerp(a.hoursFromNow, b.hoursFromNow),
+    time,
+    hoursFromNow,
     median: lerp(a.median, b.median),
     p10: lerp(a.p10, b.p10),
     p90: lerp(a.p90, b.p90),
@@ -540,7 +553,9 @@ function blendVariable(
     const available: Array<{ model: ModelId; point: ForecastPoint }> = [];
     for (const input of inputs) {
       const pt =
-        input === baseInput ? basePt : sampleAt(seriesByModel.get(input.model) ?? [], timeMs);
+        input === baseInput
+          ? basePt
+          : sampleAt(seriesByModel.get(input.model) ?? [], timeMs, varKey === "precipitation");
       if (pt) available.push({ model: input.model, point: pt });
     }
 

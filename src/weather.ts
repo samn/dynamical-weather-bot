@@ -1,7 +1,7 @@
 import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
 import { FORECAST_HORIZON_HOURS } from "./types.js";
-import type { LatLon, ForecastPoint, ForecastVariable, ModelForecast } from "./types.js";
+import type { LatLon, ForecastPoint, ForecastVariable } from "./types.js";
 import { normalizeLongitude } from "./geo.js";
 import { dewPointFromRelativeHumidity } from "./humidity.js";
 
@@ -358,27 +358,4 @@ export async function fetchGefsVariable(
     leadTimeHours,
     initTime,
   );
-}
-
-/** Fetch the full 72-hour probabilistic GEFS forecast for a location */
-export async function fetchGefsForecast(location: LatLon): Promise<ModelForecast> {
-  const meta = await fetchGefsMetadata(location);
-  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
-    fetchGefsVariable(meta, "temperature"),
-    fetchGefsVariable(meta, "precipitation"),
-    fetchGefsVariable(meta, "windSpeed"),
-    fetchGefsVariable(meta, "cloudCover"),
-    fetchGefsVariable(meta, "dewPoint"),
-  ]);
-  return {
-    model: "NOAA GEFS",
-    isEnsemble: true,
-    location,
-    initTime: meta.initTime.toISOString(),
-    temperature,
-    precipitation,
-    windSpeed: ws,
-    cloudCover,
-    dewPoint,
-  };
 }

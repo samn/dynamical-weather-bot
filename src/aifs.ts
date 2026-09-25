@@ -1,6 +1,6 @@
 import * as zarr from "zarrita";
 import { IcechunkStore } from "icechunk-js";
-import type { LatLon, ModelForecast, ForecastPoint, ForecastVariable } from "./types.js";
+import type { LatLon, ForecastPoint, ForecastVariable } from "./types.js";
 import {
   latToIndex,
   lonToIndex,
@@ -179,27 +179,4 @@ export async function fetchAifsVariable(
     leadTimeHours,
     initTime,
   );
-}
-
-/** Fetch the full 72-hour probabilistic ECMWF AIFS ENS forecast for a location */
-export async function fetchAifsForecast(location: LatLon): Promise<ModelForecast> {
-  const meta = await fetchAifsMetadata(location);
-  const [temperature, precipitation, ws, cloudCover, dewPoint] = await Promise.all([
-    fetchAifsVariable(meta, "temperature"),
-    fetchAifsVariable(meta, "precipitation"),
-    fetchAifsVariable(meta, "windSpeed"),
-    fetchAifsVariable(meta, "cloudCover"),
-    fetchAifsVariable(meta, "dewPoint"),
-  ]);
-  return {
-    model: "ECMWF AIFS",
-    isEnsemble: true,
-    location,
-    initTime: meta.initTime.toISOString(),
-    temperature,
-    precipitation,
-    windSpeed: ws,
-    cloudCover,
-    dewPoint,
-  };
 }
