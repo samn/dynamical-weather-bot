@@ -10,6 +10,12 @@ import {
   type CachedModelInput,
 } from "./helpers.js";
 
+/**
+ * Fixed "now" for the feels-like test: a January NYC forecast, archived
+ * (and so immutable) in every data store.
+ */
+const FEELS_LIKE_NOW = new Date("2026-01-15T14:00:00Z");
+
 // ── Tests: serial group with shared real data ───────────────────────────
 test.describe("real forecast integration", () => {
   test.describe.configure({ mode: "serial" });
@@ -439,13 +445,20 @@ test.describe("real forecast integration", () => {
   // ─── Test: Feels-like toggle and dew point overlay ──────────────────
 
   test("temperature chart supports feels-like mode and a dew point overlay", async ({ page }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(180_000);
     await page.addInitScript(() => {
       // Start from known defaults so the toggles begin in the "actual" state
-      localStorage.removeItem("temp-mode");
-      localStorage.removeItem("show-dewpoint");
+      localStorage.clear();
     });
-    await loadFromCache(page);
+    // "Feels like" only differs from air temperature in hot (heat index) or
+    // cold and windy (wind chill) weather — in mild weather both charts are
+    // pixel-identical. Pin the clock to a January morning so the app selects
+    // an archived NYC winter forecast, where wind chill always applies,
+    // instead of whatever today's weather happens to be.
+    await page.clock.setFixedTime(FEELS_LIKE_NOW);
+    await proxyExternalRequests(page);
+    await page.goto("/?lat=40.75&lon=-74");
+    await waitForForecastLoad(page);
 
     // Controls exist and default to actual temperature
     await expect(page.locator("#temp-actual-btn")).toHaveClass(/active/);
