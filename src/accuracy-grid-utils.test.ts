@@ -4,6 +4,8 @@ import {
   parseStationsCsv,
   leadTimeToHourBin,
   parseParquetRow,
+  roundValue,
+  toAppUnits,
 } from "../scripts/accuracy-grid-utils.js";
 
 describe("snapToGrid", () => {
@@ -130,5 +132,26 @@ describe("parseParquetRow", () => {
     const result = parseParquetRow(row);
     expect(result?.lead_time).toBe(86400000000000);
     expect(result?.window).toBe(7776000000000000);
+  });
+});
+
+describe("toAppUnits", () => {
+  it("converts precipitation rates from kg/m²/s to mm/hr", () => {
+    expect(toAppUnits("precipitation_surface", 1e-5)).toBeCloseTo(0.036, 10);
+  });
+
+  it("leaves other variables unchanged", () => {
+    expect(toAppUnits("temperature_2m", 1.25)).toBe(1.25);
+  });
+});
+
+describe("roundValue", () => {
+  it("rounds to 4 significant digits", () => {
+    expect(roundValue(1.2281101942062378)).toBe(1.228);
+    expect(roundValue(-0.35241490602493286)).toBe(-0.3524);
+  });
+
+  it("keeps small values from rounding to zero", () => {
+    expect(roundValue(0.00003830716377706267)).toBe(0.00003831);
   });
 });

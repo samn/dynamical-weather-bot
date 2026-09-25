@@ -82,3 +82,21 @@ export function parseParquetRow(row: unknown[]): StatRow | undefined {
     window: Number(row[7]),
   };
 }
+
+/** Factors converting scorecard values from the dataset's native units to
+ *  the units the app forecasts in. Precipitation is scored as a rate in
+ *  kg/m²/s; the app works in mm/hr. */
+const UNIT_CONVERSIONS: Record<string, number> = {
+  precipitation_surface: 3600,
+};
+
+/** Convert a scorecard metric or bias for `variable` into app units */
+export function toAppUnits(variable: string, value: number): number {
+  return value * (UNIT_CONVERSIONS[variable] ?? 1);
+}
+
+/** Round to 4 significant digits — plenty for weights and biases, and it
+ *  keeps small values (precipitation rates) from rounding to zero */
+export function roundValue(value: number): number {
+  return Number(value.toPrecision(4));
+}

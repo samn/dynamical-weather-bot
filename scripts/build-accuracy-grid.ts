@@ -18,6 +18,8 @@ import {
   parseStationsCsv,
   leadTimeToHourBin,
   parseParquetRow,
+  roundValue,
+  toAppUnits,
   type Station,
   type StatRow,
 } from "./accuracy-grid-utils.js";
@@ -50,11 +52,13 @@ const VARIABLE_METRICS: Record<string, string[]> = {
   precipitation_surface: ["CRPS", "MAE_bc", "MAE"],
 };
 
-/** Bias metrics in preference order (for debiasing during blending) */
+/** Bias metrics in preference order (for debiasing during blending).
+ *  Only temperature is debiased at runtime (see BIAS_KEYS in src/blend.ts),
+ *  so other variables' biases would only add bundle weight. */
 const BIAS_METRICS: Record<string, string[]> = {
   temperature_2m: ["Bias_bc", "Bias"],
-  precipitation_surface: ["Bias"],
 };
+
 
 /** Map parquet model names to our internal ModelId strings.
  *  Multiple parquet sources may map to the same ModelId (e.g. AIFS ENS preferred over AIFS Single). */
@@ -178,6 +182,7 @@ async function main() {
     const modelId = PARQUET_TO_MODEL[r.model]!;
     sourceRowCounts.set(r.model, (sourceRowCounts.get(r.model) ?? 0) + 1);
     if (!isFinite(r.value)) continue;
+    const value = roundValue(toAppUnits(r.variable, r.value));
 
     const hourBin = leadTimeToHourBin(r.lead_time);
     if (hourBin === undefined) continue;
@@ -186,7 +191,7 @@ async function main() {
     const acceptedMetrics = VARIABLE_METRICS[r.variable];
     if (acceptedMetrics) {
       const metricPriority = acceptedMetrics.indexOf(r.metric);
-      if (metricPriority >= 0 && r.value > 0) {
+      if (metricPriority >= 0 && value > 0) {
         const newPriority = combinedPriority(r.model, metricPriority);
         const priorityKey = `${r.station_id}|${modelId}|${r.variable}|${hourBin}`;
         const existing = storedPriority.get(priorityKey);
@@ -205,7 +210,7 @@ async function main() {
           }
           if (!sm[modelId]) sm[modelId] = {};
           if (!sm[modelId]![r.variable]) sm[modelId]![r.variable] = {};
-          sm[modelId]![r.variable]![String(hourBin)] = r.value;
+          sm[modelId]![r.variable]![String(hourBin)] = value;
         }
       }
     }
@@ -228,7 +233,7 @@ async function main() {
           }
           if (!sb[modelId]) sb[modelId] = {};
           if (!sb[modelId]![r.variable]) sb[modelId]![r.variable] = {};
-          sb[modelId]![r.variable]![String(hourBin)] = r.value;
+          sb[modelId]![r.variable]![String(hourBin)] = value;
         }
       }
     }
@@ -321,8 +326,7 @@ async function main() {
             for (const lead of Object.keys(leads)) {
               const ws = wSums[model]?.[varName]?.[lead];
               if (ws && ws > 0) {
-                accumulated[model]![varName]![lead] =
-                  Math.round((accumulated[model]![varName]![lead]! / ws) * 1000) / 1000;
+                accumulated[model]![varName]![lead] = roundValue(accumulated[model]![varName]![lead]! / ws);
               }
             }
           }
