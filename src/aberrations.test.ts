@@ -47,6 +47,69 @@ function makeForecast(overrides: Partial<ForecastData> = {}): ForecastData {
   };
 }
 
+/** A forecast whose only notable weather is an oppressive dew point at
+ *  one timestep, placed `hours` from now */
+function makeSpikeForecast(hours: number): ForecastData {
+  const comfortable = Array.from({ length: 24 }, (_, i) =>
+    makePoint({ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: i * 3 }),
+  );
+  const spike = makePoint({
+    median: 25,
+    p10: 23,
+    p90: 26,
+    min: 22,
+    max: 27,
+    hoursFromNow: hours,
+  });
+  return makeForecast({
+    dewPoint: [
+      ...comfortable.filter((p) => p.hoursFromNow < hours),
+      spike,
+      ...comfortable.filter((p) => p.hoursFromNow > hours),
+    ],
+  });
+}
+
+/**
+ * Build a forecast whose temperature and dew point are flat except for a
+ * single hot, muggy timestep, so heat alerts have an unambiguous peak.
+ */
+function makeHeatForecast(opts: {
+  tempC: number;
+  dewPointC: number;
+  /** 90th-percentile temperature at the peak (defaults to the median) */
+  tempP90C?: number;
+  /** Index of the peak timestep within the 24-step series */
+  peakIndex?: number;
+  /** Offset applied to every hoursFromNow, for testing past peaks */
+  hoursOffset?: number;
+}): ForecastData {
+  const peakIndex = opts.peakIndex ?? 8;
+  const offset = opts.hoursOffset ?? 0;
+  return makeForecast({
+    temperature: Array.from({ length: 24 }, (_, i) =>
+      makePoint({
+        median: i === peakIndex ? opts.tempC : 20,
+        p90: i === peakIndex ? (opts.tempP90C ?? opts.tempC) : 22,
+        p10: 18,
+        min: 16,
+        max: 40,
+        hoursFromNow: i * 3 + offset,
+      }),
+    ),
+    dewPoint: Array.from({ length: 24 }, (_, i) =>
+      makePoint({
+        median: i === peakIndex ? opts.dewPointC : 10,
+        p10: 8,
+        p90: 12,
+        min: 6,
+        max: 26,
+        hoursFromNow: i * 3 + offset,
+      }),
+    ),
+  });
+}
+
 describe("detectAberrations", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -73,29 +136,6 @@ describe("detectAberrations", () => {
   });
 
   describe("displayed forecast window", () => {
-    /** A forecast whose only notable weather is an oppressive dew point at
-     *  one timestep, placed `hours` from now */
-    function makeSpikeForecast(hours: number): ForecastData {
-      const comfortable = Array.from({ length: 24 }, (_, i) =>
-        makePoint({ median: 10, p10: 8, p90: 12, min: 6, max: 14, hoursFromNow: i * 3 }),
-      );
-      const spike = makePoint({
-        median: 25,
-        p10: 23,
-        p90: 26,
-        min: 22,
-        max: 27,
-        hoursFromNow: hours,
-      });
-      return makeForecast({
-        dewPoint: [
-          ...comfortable.filter((p) => p.hoursFromNow < hours),
-          spike,
-          ...comfortable.filter((p) => p.hoursFromNow > hours),
-        ],
-      });
-    }
-
     it("ignores timesteps before now, which blended models carry from earlier init times", () => {
       // A model initialized last night contributes a muggy evening that has
       // already happened — off the left of the charts, and over with.
@@ -374,46 +414,6 @@ describe("detectAberrations", () => {
     expect(humid).toBeDefined();
     expect(humid!.message).toContain("°F");
   });
-
-  /**
-   * Build a forecast whose temperature and dew point are flat except for a
-   * single hot, muggy timestep, so heat alerts have an unambiguous peak.
-   */
-  function makeHeatForecast(opts: {
-    tempC: number;
-    dewPointC: number;
-    /** 90th-percentile temperature at the peak (defaults to the median) */
-    tempP90C?: number;
-    /** Index of the peak timestep within the 24-step series */
-    peakIndex?: number;
-    /** Offset applied to every hoursFromNow, for testing past peaks */
-    hoursOffset?: number;
-  }): ForecastData {
-    const peakIndex = opts.peakIndex ?? 8;
-    const offset = opts.hoursOffset ?? 0;
-    return makeForecast({
-      temperature: Array.from({ length: 24 }, (_, i) =>
-        makePoint({
-          median: i === peakIndex ? opts.tempC : 20,
-          p90: i === peakIndex ? (opts.tempP90C ?? opts.tempC) : 22,
-          p10: 18,
-          min: 16,
-          max: 40,
-          hoursFromNow: i * 3 + offset,
-        }),
-      ),
-      dewPoint: Array.from({ length: 24 }, (_, i) =>
-        makePoint({
-          median: i === peakIndex ? opts.dewPointC : 10,
-          p10: 8,
-          p90: 12,
-          min: 6,
-          max: 26,
-          hoursFromNow: i * 3 + offset,
-        }),
-      ),
-    });
-  }
 
   it("warns about extreme heat when the median heat index reaches the danger band", () => {
     // 38°C air with a 24°C dew point ≈ 108°F heat index (NWS "Danger")

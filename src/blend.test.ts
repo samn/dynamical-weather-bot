@@ -818,16 +818,16 @@ describe("blendSingleVariable", () => {
   });
 });
 
-describe("computeCommonTimeRange", () => {
-  function pts(startHour: number, endHour: number, stepHours: number): ForecastPoint[] {
-    const result: ForecastPoint[] = [];
-    for (let h = startHour; h <= endHour; h += stepHours) {
-      const time = new Date(Date.UTC(2026, 3, 1, h)).toISOString();
-      result.push(makeForecastPoint({ time, hoursFromNow: h }));
-    }
-    return result;
+function pts(startHour: number, endHour: number, stepHours: number): ForecastPoint[] {
+  const result: ForecastPoint[] = [];
+  for (let h = startHour; h <= endHour; h += stepHours) {
+    const time = new Date(Date.UTC(2026, 3, 1, h)).toISOString();
+    result.push(makeForecastPoint({ time, hoursFromNow: h }));
   }
+  return result;
+}
 
+describe("computeCommonTimeRange", () => {
   it("returns the intersection of overlapping time ranges", () => {
     const inputs = [
       { model: "NOAA GEFS" as const, points: pts(0, 72, 3), isEnsemble: true },
