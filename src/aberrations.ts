@@ -176,7 +176,7 @@ export function detectAberrations(
       aberrations.push({
         type: "danger",
         icon: "\u{1F32C}\u{FE0F}",
-        message: `Strong winds expected ${formatDayPart(peak.time)}: gusts up to ${fmtWind(maxWindP90)}`,
+        message: `Strong winds expected ${formatDayPart(peak.time)}: up to ${fmtWind(maxWindP90)} (90th percentile)`,
       });
     }
   }

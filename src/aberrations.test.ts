@@ -331,6 +331,9 @@ describe("detectAberrations", () => {
     const wind = result.find((a) => a.type === "danger");
     expect(wind).toBeDefined();
     expect(wind!.message).toContain(`Strong winds expected ${formatDayPart(pointTime(18))}`);
+    // 10m sustained wind, not gusts, so the alert mustn't call it gusts
+    expect(wind!.message).toContain("up to 12.0 m/s (90th percentile)");
+    expect(wind!.message).not.toContain("gust");
   });
 
   it("detects clearing skies within the forecast window", () => {

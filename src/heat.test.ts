@@ -3,9 +3,12 @@ import { computeHeatSeries, heatIndexRisk, wetBulbRisk, wetBulbTemperature } fro
 import { dewPointFromRelativeHumidity } from "./humidity.js";
 import type { ForecastPoint } from "./types.js";
 
+/** A forecast point; unless given, its valid time follows its hoursFromNow */
 function point(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
-    time: new Date(2026, 6, 20, 12, 0, 0).toISOString(),
+    time: new Date(
+      new Date(2026, 6, 20, 12, 0, 0).getTime() + (overrides.hoursFromNow ?? 0) * 3600 * 1000,
+    ).toISOString(),
     hoursFromNow: 0,
     median: 30,
     p10: 28,
@@ -120,12 +123,14 @@ describe("computeHeatSeries", () => {
     expect(p.heatIndexC).toBeCloseTo(45.1, 0);
   });
 
-  it("aligns the dew point series by rounded hoursFromNow", () => {
-    const temperature = [point({ hoursFromNow: 0 }), point({ hoursFromNow: 3.2 })];
-    const dewPoint = [point({ hoursFromNow: 3, median: 20, p90: 20 })];
+  it("aligns the dew point series by valid time", () => {
+    // Same valid time, but hoursFromNow computed at different fetch times
+    const time = "2026-07-20T15:00:00.000Z";
+    const temperature = [point({ hoursFromNow: 0 }), point({ time, hoursFromNow: 3.4 })];
+    const dewPoint = [point({ time, hoursFromNow: 2.6, median: 20, p90: 20 })];
     const series = computeHeatSeries(temperature, dewPoint);
     expect(series).toHaveLength(1);
-    expect(series[0]!.hoursFromNow).toBe(3.2);
+    expect(series[0]!.hoursFromNow).toBe(3.4);
     expect(series[0]!.dewPointC).toBe(20);
   });
 
