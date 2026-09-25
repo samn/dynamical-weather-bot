@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parquetRead } from "hyparquet";
+import { parquetMetadata, parquetRead } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
 import { haversineKm } from "../src/geo.js";
 import type { ModelId } from "../src/types.js";
@@ -56,6 +56,65 @@ const BIAS_METRICS: Record<string, string[]> = {
   precipitation_surface: ["Bias"],
 };
 
+/** Map parquet model names to our internal ModelId strings.
+ *  Multiple parquet sources may map to the same ModelId (e.g. AIFS ENS preferred over AIFS Single). */
+const PARQUET_TO_MODEL: Record<string, ModelId> = {
+  "NOAA GEFS": "NOAA GEFS",
+  "NOAA HRRR": "NOAA HRRR",
+  "ECMWF IFS ENS": "ECMWF IFS ENS",
+  "ECMWF AIFS ENS": "ECMWF AIFS",
+  "ECMWF AIFS Single": "ECMWF AIFS",
+};
+
+/** Parquet columns needed by parseParquetRow, in the positional order it expects */
+const PARQUET_COLUMNS = ["station_id", "model", "variable", "lead_time", "value", "metric", "count", "window"];
+
+/** Whether a row can contribute to the grid: a model we blend, the 90-day
+ *  window, and a skill or bias metric we use for its variable. */
+function isRelevantRow(r: StatRow): boolean {
+  if (PARQUET_TO_MODEL[r.model] === undefined) return false;
+  // Allow some tolerance for different window representations
+  if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) return false;
+  return (
+    (VARIABLE_METRICS[r.variable]?.includes(r.metric) ?? false) ||
+    (BIAS_METRICS[r.variable]?.includes(r.metric) ?? false)
+  );
+}
+
+/**
+ * Read the scorecard one row group at a time, keeping only relevant rows.
+ * The scorecard has 10M+ rows across every model, window and metric;
+ * materializing it all at once exceeds Node's default heap.
+ */
+async function readRelevantRows(file: ArrayBuffer): Promise<StatRow[]> {
+  const metadata = parquetMetadata(file);
+  const rows: StatRow[] = [];
+  let rowStart = 0;
+  let totalRows = 0;
+  for (const group of metadata.row_groups) {
+    const rowEnd = rowStart + Number(group.num_rows);
+    await parquetRead({
+      file,
+      metadata,
+      compressors,
+      columns: PARQUET_COLUMNS,
+      rowStart,
+      rowEnd,
+      onComplete: (data: unknown[][]) => {
+        for (const row of data) {
+          if (!Array.isArray(row)) continue;
+          totalRows++;
+          const parsed = parseParquetRow(row);
+          if (parsed && isRelevantRow(parsed)) rows.push(parsed);
+        }
+      },
+    });
+    rowStart = rowEnd;
+  }
+  console.log(`Parsed ${totalRows} statistic rows, kept ${rows.length} relevant rows`);
+  return rows;
+}
+
 interface GridCell {
   stationCount: number;
   metrics: Record<string, Record<string, Record<string, number>>>;
@@ -89,31 +148,7 @@ async function main() {
   const stations = parseStationsCsv(stationsCsv);
   console.log(`Loaded ${stations.size} stations`);
 
-  // Parse parquet
-  const rows: StatRow[] = [];
-  await parquetRead({
-    file: parquetBuf,
-    compressors,
-    onComplete: (data: unknown[][]) => {
-      for (const row of data) {
-        if (!Array.isArray(row)) continue;
-        const parsed = parseParquetRow(row);
-        if (parsed) rows.push(parsed);
-      }
-    },
-  });
-
-  console.log(`Parsed ${rows.length} statistic rows`);
-
-  // Map parquet model names to our internal ModelId strings.
-  // Multiple parquet sources may map to the same ModelId (e.g. AIFS ENS preferred over AIFS Single).
-  const PARQUET_TO_MODEL: Record<string, ModelId> = {
-    "NOAA GEFS": "NOAA GEFS",
-    "NOAA HRRR": "NOAA HRRR",
-    "ECMWF IFS ENS": "ECMWF IFS ENS",
-    "ECMWF AIFS ENS": "ECMWF AIFS",
-    "ECMWF AIFS Single": "ECMWF AIFS",
-  };
+  const rows = await readRelevantRows(parquetBuf);
 
   // Source priority: when multiple parquet model names map to the same ModelId,
   // lower-priority sources are overwritten by higher-priority ones (smaller number = higher priority).
@@ -140,11 +175,8 @@ async function main() {
   let bcCount = 0;
 
   for (const r of rows) {
-    const modelId = PARQUET_TO_MODEL[r.model];
-    if (modelId === undefined) continue;
+    const modelId = PARQUET_TO_MODEL[r.model]!;
     sourceRowCounts.set(r.model, (sourceRowCounts.get(r.model) ?? 0) + 1);
-    // Check window (allow some tolerance for different representations)
-    if (r.window !== WINDOW_90D && r.window !== 7776000 && r.window !== 7776000000) continue;
     if (!isFinite(r.value)) continue;
 
     const hourBin = leadTimeToHourBin(r.lead_time);
@@ -204,7 +236,7 @@ async function main() {
 
   console.log(`${uniqueCount} unique station/model/variable/lead combinations (${bcCount} bias-corrected)`);
   console.log(`${stationBiases.size} stations have bias data`);
-  console.log("Parquet model row counts:");
+  console.log("Relevant rows per parquet model:");
   for (const [model, count] of [...sourceRowCounts.entries()].sort()) {
     console.log(`  ${model}: ${count}`);
   }
