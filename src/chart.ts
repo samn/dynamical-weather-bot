@@ -519,8 +519,9 @@ export function computeYRange(
     const dataMax = Math.max(...data.map((p) => p.max));
     const bandCeiling = intensityBands.find((b) => b.max >= dataMax)?.max;
     // Fill out the band the data peaks in, unless its ceiling is far above
-    // the data (Heavy rain tops out at 50 mm/h), which would flatten the curve
-    if (bandCeiling !== undefined && bandCeiling <= yMax * 2) {
+    // the data (Heavy rain tops out at 50 mm/h), which would flatten the curve.
+    // Always fill the lowest band so trace amounts don't fill the whole chart.
+    if (bandCeiling !== undefined && bandCeiling <= Math.max(yMax * 2, intensityBands[0]!.max)) {
       yMax = Math.max(yMax, bandCeiling);
     }
   }
