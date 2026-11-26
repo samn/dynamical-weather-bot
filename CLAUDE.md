@@ -34,6 +34,7 @@ Pre-commit hooks run oxlint, typecheck, and tests on all commits.
 - "Now" is pinned to a fixed timestamp (`FIXED_NOW` in the spec) and init-time selection is clock-relative (`findLatestInitIndex` in weather.ts), so the tests always fetch the same immutable archived forecast from dynamical.org and render byte-identical pixels.
 - A failure means the rendered app changed. If the change is an intentional visual change, regenerate baselines with `npx playwright test e2e/visual.spec.ts --update-snapshots` and commit the updated PNGs with the code change, after confirming the new screenshots look correct. If the change is unintentional, fix the regression instead.
 - Never update baselines to make an unexplained diff go away — inspect the diff image in `test-results/` first and understand the cause.
+- Baselines must be rendered with CI's fonts. Charts use `system-ui`, which CI's Ubuntu runner resolves to DejaVu Sans. Some containers (including Claude's cloud environment) resolve it to Inter instead, so every text pixel differs and CI fails. Check with `fc-match system-ui`; if it isn't DejaVu Sans, run Playwright with a `FONTCONFIG_FILE` that includes `/etc/fonts/fonts.conf` and rejects the Inter families (`<selectfont><rejectfont><pattern><patelt name="family"><string>Inter</string></patelt></pattern></rejectfont></selectfont>`, same for `Inter Display`). The untouched charts matching their existing baselines confirms the setup.
 
 ## Pre-commit Checks
 
