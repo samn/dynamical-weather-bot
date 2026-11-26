@@ -29,7 +29,7 @@ const FIXED_NOW = new Date("2026-06-10T13:00:00Z");
 /** Grid-aligned NYC coordinates (0.25° GEFS grid point) */
 const LOCATION_QUERY = "/?lat=40.75&lon=-74";
 
-// Baselines are rendered on Linux (CI and Claude's environment). Skip
+// Baselines are rendered on Linux with CI's fonts (see CLAUDE.md). Skip
 // elsewhere so macOS dev machines don't fail on missing platform snapshots.
 test.skip(
   process.platform !== "linux",
