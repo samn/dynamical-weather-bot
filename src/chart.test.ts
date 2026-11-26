@@ -198,6 +198,15 @@ describe("computeYRange", () => {
     expect(yMax).toBeGreaterThanOrEqual(2);
   });
 
+  it("does not stretch yMax to a band ceiling far above the data", () => {
+    const bands = [
+      { min: 0, max: 7.5, label: "Moderate", color: "rgba(0,0,0,0.1)" },
+      { min: 7.5, max: 50, label: "Heavy", color: "rgba(0,0,0,0.2)" },
+    ];
+    const { yMax } = computeYRange(mkData([{ min: 0, max: 10 }]), bands);
+    expect(yMax).toBe(11);
+  });
+
   it("yClampMin applies after intensity band adjustments", () => {
     const bands = [{ min: 0, max: 5, label: "Low", color: "rgba(0,0,0,0.1)" }];
     const data = mkData([{ min: 1, max: 3 }]);

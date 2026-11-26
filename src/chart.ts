@@ -518,7 +518,9 @@ export function computeYRange(
     yMin = 0;
     const dataMax = Math.max(...data.map((p) => p.max));
     const bandCeiling = intensityBands.find((b) => b.max >= dataMax)?.max;
-    if (bandCeiling !== undefined) {
+    // Fill out the band the data peaks in, unless its ceiling is far above
+    // the data (Heavy rain tops out at 50 mm/h), which would flatten the curve
+    if (bandCeiling !== undefined && bandCeiling <= yMax * 2) {
       yMax = Math.max(yMax, bandCeiling);
     }
   }
@@ -953,10 +955,11 @@ export function renderChart(opts: ChartOptions): void {
       const visibleMin = Math.max(band.min, yMin);
       const visibleMax = Math.min(band.max, yMax);
       if (visibleMin >= yMax || visibleMax <= yMin) continue;
-      const midValue = (visibleMin + visibleMax) / 2;
-      const y = yScale(midValue);
-      ctx.fillStyle = "#8b8fa3";
-      ctx.fillText(band.label, padding.left - 4, y);
+      // A label in a band thinner than the text would overlap its neighbours
+      if (yScale(visibleMin) - yScale(visibleMax) >= fontSize) {
+        ctx.fillStyle = "#8b8fa3";
+        ctx.fillText(band.label, padding.left - 4, yScale((visibleMin + visibleMax) / 2));
+      }
 
       // Grid line at band boundary (skip the bottom boundary at 0)
       if (band.min > yMin) {
